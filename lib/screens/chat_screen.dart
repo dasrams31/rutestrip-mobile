@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../api.dart';
 import '../app_state.dart';
@@ -477,7 +476,7 @@ class _LinkText extends StatelessWidget {
         TextSpan(
           text: url,
           style: TextStyle(color: linkColor, decoration: TextDecoration.underline, fontWeight: FontWeight.w600),
-          recognizer: TapGestureRecognizer()..onTap = () => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+          recognizer: TapGestureRecognizer()..onTap = () => openExternal(url),
         ),
       );
       last = m.end - tail.length;
@@ -748,7 +747,7 @@ class _AiBubble extends StatelessWidget {
           TextSpan(
             text: m.group(2),
             style: const TextStyle(color: RS.z7, decoration: TextDecoration.underline, fontWeight: FontWeight.w600),
-            recognizer: TapGestureRecognizer()..onTap = () => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+            recognizer: TapGestureRecognizer()..onTap = () => openExternal(url),
           ),
         );
       }

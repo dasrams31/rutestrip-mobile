@@ -8,11 +8,16 @@ import 'package:http/http.dart' as http;
 
 /// Client for https://rutestrip.ai.id: /api/v1 (docs/API.md) and the SSO API (docs/SSO.md).
 class Api {
-  static const baseUrl = 'https://rutestrip.ai.id';
+  /// Production by default. Test builds can point at a local backend:
+  /// flutter run --dart-define=RUTESTRIP_API=http://127.0.0.1:8000 (debug builds only allow cleartext to localhost).
+  static const baseUrl = String.fromEnvironment('RUTESTRIP_API', defaultValue: 'https://rutestrip.ai.id');
 
   final http.Client _client = http.Client();
   String lang = 'id';
   String? token;
+
+  /// Called when the server rejects the token (expired, password changed, logged out everywhere).
+  void Function()? onUnauthorized;
 
   Map<String, String> get _headers => {
     'Accept': 'application/json',
@@ -28,6 +33,7 @@ class Api {
       final req = switch (method) {
         'GET' => _client.get(uri, headers: _headers),
         'DELETE' => _client.delete(uri, headers: _headers),
+        'PUT' => _client.put(uri, headers: {..._headers, 'Content-Type': 'application/json'}, body: jsonEncode(body ?? {})),
         _ => _client.post(uri, headers: {..._headers, 'Content-Type': 'application/json'}, body: jsonEncode(body ?? {})),
       };
       res = await req.timeout(timeout);
@@ -63,6 +69,7 @@ class Api {
         if (v is List && v.isNotEmpty) fieldErrors['$k'] = '${v.first}';
       });
     }
+    if (res.statusCode == 401 && token != null) onUnauthorized?.call();
     final kind = switch (res.statusCode) {
       401 => ApiError.unauthorized,
       403 => ApiError.forbidden,
@@ -109,6 +116,45 @@ class Api {
     final data = await _send('GET', '/api/v1/likes') as Map;
     return (data['data'] as List).map((e) => RouteSummary.fromJson(e as Map)).toList();
   }
+
+  // --- route page extras ----------------------------------------------------------
+
+  Future<Reviews> reviews(int routeId) async => Reviews.fromJson(await _send('GET', '/api/v1/routes/$routeId/reviews') as Map);
+
+  Future<Reviews> writeReview(int routeId, int rating, String? comment) async => Reviews.fromJson(
+    await _send(
+      'POST',
+      '/api/v1/routes/$routeId/reviews',
+      body: {'rating': rating, if (comment != null && comment.trim().isNotEmpty) 'comment': comment.trim()},
+    ) as Map,
+  );
+
+  Future<Conditions> conditions(int routeId) async =>
+      Conditions.fromJson(await _send('GET', '/api/v1/routes/$routeId/conditions', timeout: const Duration(seconds: 30)) as Map);
+
+  Future<List<GpxVersionInfo>> versions(int routeId) async =>
+      ((await _send('GET', '/api/v1/routes/$routeId/versions') as Map)['data'] as List).map((e) => GpxVersionInfo.fromJson(e as Map)).toList();
+
+  // --- account -------------------------------------------------------------------
+
+  Future<Dashboard> dashboard() async => Dashboard.fromJson(await _send('GET', '/api/v1/me') as Map);
+
+  Future<(List<SearchEntry>, int lastPage)> history({int page = 1}) async {
+    final data = await _send('GET', '/api/v1/me/history?page=$page') as Map;
+    return ((data['data'] as List).map((e) => SearchEntry.fromJson(e as Map)).toList(), ((data['meta'] as Map)['last_page'] as num).toInt());
+  }
+
+  Future<AppUser> updateProfile(String name, String email) async =>
+      AppUser.fromJson((await _send('PUT', '/api/v1/me/profile', body: {'name': name, 'email': email}) as Map)['user'] as Map);
+
+  /// Returns the new token: the old one stops working on the server.
+  Future<AuthResult> updatePassword(String current, String password, String confirmation) async => AuthResult.fromJson(
+    await _send('PUT', '/api/v1/me/password', body: {'current_password': current, 'password': password, 'password_confirmation': confirmation}) as Map,
+  );
+
+  Future<void> updateLocale(String locale) async => _send('PUT', '/api/v1/me/locale', body: {'locale': locale});
+
+  Future<void> logoutEverywhere() async => _send('POST', '/api/v1/me/logout-all');
 
   // --- GPX upload ------------------------------------------------------------------
 
@@ -290,6 +336,11 @@ class RouteDetail extends RouteSummary {
       summitPoint = j['summit_point'] is Map ? TrailPoint.fromJson(j['summit_point'] as Map) : null,
       profile = _points(j['elevation_profile']),
       liked = j['liked'] == true,
+      uploader = j['uploader'] as String?,
+      averageRating = _d(j['average_rating']),
+      reviewCount = _i(j['review_count']) ?? 0,
+      gpxStatus = j['gpx_status'] as String?,
+      practical = j['practical'] is Map ? Map<String, dynamic>.from(j['practical'] as Map) : const {},
       similar = (j['similar'] as List? ?? const []).map((e) => RouteSummary.fromJson(e as Map)).toList(),
       super.fromJson();
 
@@ -299,6 +350,10 @@ class RouteDetail extends RouteSummary {
   final List<List<double>> profile; // [km, m]
   final bool liked;
   final List<RouteSummary> similar;
+  final String? uploader, gpxStatus;
+  final double? averageRating;
+  final int reviewCount;
+  final Map<String, dynamic> practical;
 }
 
 class RoutePage {
@@ -347,10 +402,13 @@ class SearchResult {
 }
 
 class AppUser {
-  AppUser.fromJson(Map j) : id = (j['id'] as num).toInt(), name = '${j['name'] ?? ''}', email = '${j['email'] ?? ''}';
+  AppUser.fromJson(Map j) : id = (j['id'] as num).toInt(), name = '${j['name'] ?? ''}', email = '${j['email'] ?? ''}', locale = j['locale'] as String?;
 
   final int id;
   final String name, email;
+  final String? locale;
+
+  Map<String, Object?> toJson() => {'id': id, 'name': name, 'email': email, 'locale': locale};
 }
 
 class AuthResult {
@@ -388,4 +446,114 @@ class ChatPage {
   final List<ChatMessage> messages;
   final bool hasMore;
   final Set<int> deleted;
+}
+
+class Review {
+  Review.fromJson(Map j)
+    : name = '${j['name'] ?? ''}',
+      rating = _i(j['rating']),
+      comment = j['comment'] as String?,
+      createdAt = DateTime.tryParse('${j['created_at'] ?? ''}')?.toLocal();
+
+  final String name;
+  final int? rating;
+  final String? comment;
+  final DateTime? createdAt;
+}
+
+class Reviews {
+  Reviews.fromJson(Map j)
+    : average = _d(j['average_rating']),
+      count = _i(j['review_count']) ?? 0,
+      mine = _i(j['my_rating']),
+      items = (j['reviews'] as List? ?? const []).map((e) => Review.fromJson(e as Map)).toList();
+
+  final double? average;
+  final int count;
+  final int? mine;
+  final List<Review> items;
+}
+
+class Weather {
+  Weather.fromJson(Map j)
+    : text = j['weather_text'] as String?,
+      temperature = _d(j['temperature_c']),
+      feels = _d(j['apparent_temperature_c']),
+      humidity = _d(j['humidity_pct']),
+      rain = _d(j['precipitation_mm']),
+      wind = _d(j['wind_speed_kmh']),
+      gusts = _d(j['wind_gusts_kmh']),
+      windFrom = j['wind_direction'] as String?,
+      elevation = _i(j['elevation_m']);
+
+  final String? text, windFrom;
+  final double? temperature, feels, humidity, rain, wind, gusts;
+  final int? elevation;
+}
+
+class Conditions {
+  Conditions.fromJson(Map j)
+    : location = (j['location'] as Map?)?['label'] as String?,
+      basecamp = j['points'] is Map && (j['points'] as Map)['basecamp'] is Map ? TrailPoint.fromJson((j['points'] as Map)['basecamp'] as Map) : null,
+      directionsUrl = j['points'] is Map ? (((j['points'] as Map)['basecamp'] as Map?)?['directions_url'] as String?) : null,
+      basecampWeather = (j['weather'] as Map?)?['basecamp'] is Map ? Weather.fromJson((j['weather'] as Map)['basecamp'] as Map) : null,
+      summitWeather = (j['weather'] as Map?)?['summit'] is Map ? Weather.fromJson((j['weather'] as Map)['summit'] as Map) : null,
+      updated = (j['weather'] as Map?)?['updated_label'] as String?,
+      sunrise = (j['weather'] as Map?)?['sunrise'] as String?,
+      sunset = (j['weather'] as Map?)?['sunset'] as String?,
+      caution = (j['safety'] as Map?)?['level'] == 'caution',
+      safety = ((j['safety'] as Map?)?['messages'] as List? ?? const []).map((e) => '$e').toList();
+
+  final String? location, directionsUrl, updated, sunrise, sunset;
+  final TrailPoint? basecamp;
+  final Weather? basecampWeather, summitWeather;
+  final bool caution;
+  final List<String> safety;
+}
+
+class GpxVersionInfo {
+  GpxVersionInfo.fromJson(Map j)
+    : version = _i(j['version']) ?? 0,
+      active = j['active'] == true,
+      status = j['status'] as String?,
+      statusLabel = j['status_label'] as String?,
+      hash = '${j['hash'] ?? ''}',
+      changeLog = j['change_log'] as String?,
+      uploader = '${j['uploader'] ?? ''}',
+      createdAt = DateTime.tryParse('${j['created_at'] ?? ''}')?.toLocal(),
+      downloadUrl = j['download_url'] as String?;
+
+  final int version;
+  final bool active;
+  final String? status, statusLabel, changeLog, downloadUrl;
+  final String hash, uploader;
+  final DateTime? createdAt;
+}
+
+class SearchEntry {
+  SearchEntry.fromJson(Map j)
+    : query = '${j['query'] ?? ''}',
+      results = _i(j['results_count']) ?? 0,
+      createdAt = DateTime.tryParse('${j['created_at'] ?? ''}')?.toLocal();
+
+  final String query;
+  final int results;
+  final DateTime? createdAt;
+}
+
+class Dashboard {
+  Dashboard.fromJson(Map j)
+    : user = AppUser.fromJson(j['user'] as Map),
+      favorites = _i((j['stats'] as Map)['favorites']) ?? 0,
+      searches = _i((j['stats'] as Map)['searches']) ?? 0,
+      comments = _i((j['stats'] as Map)['comments']) ?? 0,
+      ratings = _i((j['stats'] as Map)['ratings']) ?? 0,
+      recent = {
+        // The same phrase searched twice shows once.
+        for (final e in (j['recent_searches'] as List? ?? const [])) '${(e as Map)['query']}'.trim().toLowerCase(): SearchEntry.fromJson(e),
+      }.values.toList();
+
+  final AppUser user;
+  final int favorites, searches, comments, ratings;
+  final List<SearchEntry> recent;
 }

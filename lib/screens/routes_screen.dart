@@ -7,6 +7,9 @@ import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/contour_header.dart';
 
+/// Mountain picked elsewhere (Home); the list applies it and clears it.
+final routesFilter = ValueNotifier<String?>(null);
+
 /// Every route, by name, with a mountain or province filter and paging on scroll.
 class RoutesScreen extends StatefulWidget {
   const RoutesScreen({super.key});
@@ -27,6 +30,11 @@ class _RoutesScreenState extends State<RoutesScreen> {
   @override
   void initState() {
     super.initState();
+    routesFilter.addListener(_takeFilter);
+    if (routesFilter.value != null) {
+      _mountain = routesFilter.value;
+      routesFilter.value = null;
+    }
     _scroll.addListener(() {
       if (_scroll.position.extentAfter < 600) _more();
     });
@@ -45,8 +53,20 @@ class _RoutesScreenState extends State<RoutesScreen> {
     }
   }
 
+  void _takeFilter() {
+    final m = routesFilter.value;
+    if (m == null || !mounted) return;
+    routesFilter.value = null;
+    setState(() {
+      _mountain = m;
+      _province = null;
+    });
+    _reload();
+  }
+
   @override
   void dispose() {
+    routesFilter.removeListener(_takeFilter);
     _scroll.dispose();
     super.dispose();
   }
@@ -194,13 +214,13 @@ class _RoutesScreenState extends State<RoutesScreen> {
               )
             else ...[
               SliverPadding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                padding: pageGutter(context, top: 16, bottom: 8, min: 20),
                 sliver: SliverToBoxAdapter(
                   child: Text(trailCount(context, _total), style: const TextStyle(color: RS.muted, fontSize: 14)),
                 ),
               ),
               SliverPadding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                padding: pageGutter(context, top: 0, bottom: 16),
                 sliver: SliverList.separated(
                   itemCount: _routes.length,
                   separatorBuilder: (_, _) => const SizedBox(height: 14),

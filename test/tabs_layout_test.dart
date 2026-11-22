@@ -6,6 +6,8 @@ import 'package:material_ui/material_ui.dart';
 import 'package:rutestrip/api.dart';
 import 'package:rutestrip/app_state.dart';
 import 'package:rutestrip/screens/chat_screen.dart';
+import 'package:rutestrip/screens/onboarding_screen.dart';
+import 'package:rutestrip/screens/settings_screen.dart';
 import 'package:rutestrip/screens/shell.dart';
 import 'package:rutestrip/screens/upload_screen.dart';
 import 'package:rutestrip/storage.dart';
@@ -34,18 +36,40 @@ void main() {
     final state = AppState(Api())
       ..lang = lang
       ..user = AppUser.fromJson({'id': 1, 'name': 'Pendaki Uji', 'email': 'uji@example.com'});
-    await tester.pumpWidget(AppScope(state: state, child: MaterialApp(theme: buildTheme(), home: screen)));
+    await tester.pumpWidget(
+      AppScope(
+        state: state,
+        child: MaterialApp(theme: buildTheme(), home: screen),
+      ),
+    );
     await tester.pump();
   }
 
   for (final lang in ['id', 'en']) {
     testWidgets('shell with bottom tabs ($lang)', (tester) async {
       await pump(tester, Shell(key: GlobalKey()), lang);
-      expect(find.byType(NavigationDestination), findsNWidgets(5));
-      for (var i = 1; i < 5; i++) {
-        await tester.tap(find.byType(NavigationDestination).at(i));
+      final labels = lang == 'en' ? ['Trails', 'Chat', 'Record', 'Me'] : ['Jalur', 'Chat', 'Rekam', 'Saya'];
+      for (final label in labels) {
+        await tester.tap(find.text(label).last);
         await tester.pump();
-        expect(tester.takeException(), isNull, reason: 'tab $i');
+        expect(tester.takeException(), isNull, reason: label);
+      }
+    });
+
+    testWidgets('onboarding slides ($lang)', (tester) async {
+      await pump(tester, const OnboardingScreen(), lang);
+      for (var i = 0; i < 4; i++) {
+        await tester.tap(find.text(lang == 'en' ? 'Next' : 'Lanjut'));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull, reason: 'slide ${i + 2}');
+      }
+      expect(find.text(lang == 'en' ? 'Get going' : 'Mulai'), findsOneWidget);
+    });
+
+    testWidgets('settings, history and about ($lang)', (tester) async {
+      for (final screen in [const SettingsScreen(), const AboutScreen(), const BatchUploadScreen()]) {
+        await pump(tester, screen, lang);
+        expect(tester.takeException(), isNull, reason: '$screen');
       }
     });
 

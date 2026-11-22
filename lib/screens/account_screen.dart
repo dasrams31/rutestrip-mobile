@@ -8,6 +8,8 @@ import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/contour_header.dart';
 import 'route_detail_screen.dart';
+import 'results_screen.dart';
+import 'settings_screen.dart';
 import 'upload_screen.dart';
 
 /// "Saya" tab: the account, GPX upload, trails saved on the phone, GPS recordings and likes.
@@ -22,6 +24,7 @@ class AccountScreen extends StatefulWidget {
 
 class _AccountScreenState extends State<AccountScreen> {
   Future<List<RouteSummary>>? _likes;
+  Future<Dashboard>? _dash;
   Future<List<SavedRoute>>? _offline;
   Future<List<Recording>>? _recordings;
   String? _lang;
@@ -45,10 +48,12 @@ class _AccountScreenState extends State<AccountScreen> {
 
   void _reload() {
     final likes = AppScope.read(context).api.likes()..ignore();
+    final dash = AppScope.read(context).api.dashboard()..ignore();
     final offline = OfflineStore.all()..ignore();
     final recordings = RecordingStore.all()..ignore();
     setState(() {
       _likes = likes;
+      _dash = dash;
       _offline = offline;
       _recordings = recordings;
     });
@@ -113,6 +118,7 @@ class _AccountScreenState extends State<AccountScreen> {
                 ],
               ),
             ),
+            _DashboardBlock(future: _dash),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
               child: Card(
@@ -141,6 +147,20 @@ class _AccountScreenState extends State<AccountScreen> {
                       ],
                     ),
                   ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () async {
+                    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const BatchUploadScreen()));
+                    _reload();
+                  },
+                  icon: const Icon(Icons.library_add_outlined),
+                  label: Text(tr(context, 'batch.title')),
                 ),
               ),
             ),
@@ -313,6 +333,103 @@ class _RouteRow extends StatelessWidget {
             trailing ?? const Icon(Icons.chevron_right, color: RS.z7),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Dashboard numbers from the server, the latest searches, and the account menu.
+class _DashboardBlock extends StatelessWidget {
+  const _DashboardBlock({required this.future});
+
+  final Future<Dashboard>? future;
+
+  @override
+  Widget build(BuildContext context) {
+    final menu = [
+      (Icons.manage_accounts_outlined, 'set.title', () => const SettingsScreen()),
+      (Icons.history, 'hist.title', () => const HistoryScreen()),
+      (Icons.info_outline, 'about.title', () => const AboutScreen()),
+    ];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          FutureBuilder<Dashboard>(
+            future: future,
+            builder: (context, snap) {
+              final d = snap.data;
+              if (d == null) return const SizedBox.shrink();
+              final stats = [(d.favorites, 'dash.favorites'), (d.searches, 'dash.searches'), (d.comments, 'dash.comments'), (d.ratings, 'dash.ratings')];
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+                      child: Row(
+                        children: [
+                          for (final (n, key) in stats)
+                            Expanded(
+                              child: Semantics(
+                                label: '${tr(context, key)}: $n',
+                                excludeSemantics: true,
+                                child: Column(
+                                  children: [
+                                    Text(fmtNum(context, n), style: RS.head(30, color: RS.z9)),
+                                    Text(
+                                      tr(context, key),
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(fontSize: 12, color: RS.muted),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (d.recent.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Text(tr(context, 'dash.recent'), style: const TextStyle(fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final h in d.recent)
+                          ActionChip(
+                            label: Text(h.query, overflow: TextOverflow.ellipsis),
+                            avatar: const Icon(Icons.history, size: 18, color: RS.z7),
+                            backgroundColor: Colors.white,
+                            side: const BorderSide(color: RS.line),
+                            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ResultsScreen(query: h.query))),
+                          ),
+                      ],
+                    ),
+                  ],
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: Column(
+              children: [
+                for (final (icon, key, page) in menu)
+                  ListTile(
+                    minTileHeight: 54,
+                    leading: Icon(icon, color: RS.z7),
+                    title: Text(tr(context, key), style: const TextStyle(fontWeight: FontWeight.w600)),
+                    trailing: const Icon(Icons.chevron_right, color: RS.z7),
+                    onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => page())),
+                  ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

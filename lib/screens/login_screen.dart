@@ -96,7 +96,7 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 22, 20, 32),
+            padding: pageGutter(context, top: 22, bottom: 32, min: 20),
             child: Form(
               key: _form,
               child: AutofillGroup(

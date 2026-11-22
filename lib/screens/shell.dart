@@ -8,8 +8,14 @@ import 'home_screen.dart';
 import 'record_screen.dart';
 import 'routes_screen.dart';
 
-/// Signed-in app: five tabs at the bottom. Tabs keep their state (IndexedStack);
-/// screens opened from a tab (route page, upload, map) cover the bar.
+/// Tab indexes, used when another screen opens a tab.
+class Tabs {
+  static const search = 0, routes = 1, chat = 2, record = 3, me = 4;
+}
+
+/// Signed-in app: the bottom bar of the website's PWA (five items, active one marked
+/// with a 3 px emerald line on top, the middle item in an emerald box). Tabs keep their
+/// state; screens opened from a tab (route page, upload, map) cover the bar.
 class Shell extends StatefulWidget {
   const Shell({super.key});
 
@@ -20,51 +26,123 @@ class Shell extends StatefulWidget {
 }
 
 class ShellState extends State<Shell> {
-  int _index = 0;
+  int _index = Tabs.search;
+  final _built = <int>{Tabs.search};
 
   /// Jump to a tab from anywhere (for example "Rekam" from a route page).
-  void open(int index) => setState(() => _index = index);
+  void open(int index) => setState(() {
+    _index = index;
+    _built.add(index);
+  });
 
   @override
   Widget build(BuildContext context) {
-    final tabs = [
-      (Icons.search, Icons.search, 'tab.search'),
-      (Icons.terrain_outlined, Icons.terrain, 'tab.routes'),
-      (Icons.radio_button_checked, Icons.radio_button_checked, 'tab.record'),
-      (Icons.chat_bubble_outline, Icons.chat_bubble, 'tab.chat'),
-      (Icons.person_outline, Icons.person, 'tab.me'),
-    ];
-    return Scaffold(
-      body: IndexedStack(
-        index: _index,
-        children: [
-          const HomeScreen(),
-          const RoutesScreen(),
-          RecordScreen(active: _index == 2),
-          ChatScreen(active: _index == 3),
-          AccountScreen(active: _index == 4),
-        ],
-      ),
-      bottomNavigationBar: NavigationBarTheme(
-        data: NavigationBarThemeData(
-          backgroundColor: Colors.white,
-          indicatorColor: const Color(0xFFD1FAE5),
-          height: 68,
-          labelTextStyle: WidgetStateProperty.resolveWith(
-            (s) => TextStyle(fontSize: 12.5, fontWeight: s.contains(WidgetState.selected) ? FontWeight.w700 : FontWeight.w500, color: RS.ink),
-          ),
-          iconTheme: WidgetStateProperty.resolveWith((s) => IconThemeData(color: s.contains(WidgetState.selected) ? RS.z9 : RS.muted)),
+    // Tabs are built the first time they are opened, so start-up stays light.
+    Widget lazy(int i, Widget Function() make) => _built.contains(i) ? make() : const SizedBox.shrink();
+    return PopScope(
+      // Back on another tab goes to Cari first, like leaving a page on the website.
+      canPop: _index == Tabs.search,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) open(Tabs.search);
+      },
+      child: Scaffold(
+        body: IndexedStack(
+          index: _index,
+          children: [
+            lazy(Tabs.search, () => const HomeScreen()),
+            lazy(Tabs.routes, () => const RoutesScreen()),
+            lazy(Tabs.chat, () => ChatScreen(active: _index == Tabs.chat)),
+            lazy(Tabs.record, () => RecordScreen(active: _index == Tabs.record)),
+            lazy(Tabs.me, () => AccountScreen(active: _index == Tabs.me)),
+          ],
         ),
-        child: DecoratedBox(
-          decoration: const BoxDecoration(
-            border: Border(top: BorderSide(color: RS.line)),
-          ),
-          child: NavigationBar(
-            selectedIndex: _index,
-            onDestinationSelected: open,
-            destinations: [
-              for (final (icon, selected, key) in tabs) NavigationDestination(icon: Icon(icon), selectedIcon: Icon(selected), label: tr(context, key)),
-            ],
+        bottomNavigationBar: _TabBar(index: _index, onTap: open),
+      ),
+    );
+  }
+}
+
+class _TabBar extends StatelessWidget {
+  const _TabBar({required this.index, required this.onTap});
+
+  final int index;
+  final ValueChanged<int> onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final items = [
+      (Icons.search, 'tab.search', false),
+      (Icons.map_outlined, 'tab.routes', false),
+      (Icons.chat_bubble_outline, 'tab.chat', true),
+      (Icons.radio_button_checked, 'tab.record', false),
+      (Icons.person_outline, 'tab.me', false),
+    ];
+    return Material(
+      color: Colors.white,
+      child: Container(
+        decoration: const BoxDecoration(
+          border: Border(top: BorderSide(color: RS.line)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: SizedBox(
+            height: 64,
+            child: Row(
+              children: [
+                for (final (i, (icon, label, highlight)) in items.indexed)
+                  Expanded(
+                    child: Semantics(
+                      button: true,
+                      selected: i == index,
+                      label: tr(context, label),
+                      excludeSemantics: true,
+                      child: InkWell(
+                        onTap: () => onTap(i),
+                        child: Stack(
+                          children: [
+                            if (i == index)
+                              Positioned(
+                                top: 0,
+                                left: 16,
+                                right: 16,
+                                child: Container(
+                                  height: 3,
+                                  decoration: const BoxDecoration(
+                                    color: RS.z7,
+                                    borderRadius: BorderRadius.vertical(bottom: Radius.circular(2)),
+                                  ),
+                                ),
+                              ),
+                            Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (highlight)
+                                    Container(
+                                      width: 40,
+                                      height: 28,
+                                      decoration: BoxDecoration(color: RS.z7, borderRadius: BorderRadius.circular(6)),
+                                      child: Icon(icon, color: Colors.white, size: 19),
+                                    )
+                                  else
+                                    Icon(icon, size: 24, color: i == index ? RS.z9 : RS.muted),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    tr(context, label),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: i == index ? RS.z9 : RS.muted),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),

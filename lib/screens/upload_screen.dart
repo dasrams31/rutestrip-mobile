@@ -52,8 +52,7 @@ class _UploadScreenState extends State<UploadScreen> {
   }
 
   Future<void> _pick() async {
-    final files = await FilePicker.pickFiles(type: FileType.any);
-    final file = files.isEmpty ? null : files.single;
+    final file = await FilePicker.pickFile(type: FileType.any);
     if (file == null || file.path == null) return;
     final ok = RegExp(r'\.(gpx|xml)$', caseSensitive: false).hasMatch(file.name);
     setState(() {
@@ -118,7 +117,7 @@ class _UploadScreenState extends State<UploadScreen> {
               ],
             ),
           ),
-          Padding(padding: const EdgeInsets.fromLTRB(20, 22, 20, 32), child: _done != null ? _success(context) : _formView(context)),
+          Padding(padding: pageGutter(context, top: 22, bottom: 32, min: 20), child: _done != null ? _success(context) : _formView(context)),
         ],
       ),
     );
@@ -225,6 +224,141 @@ class _UploadScreenState extends State<UploadScreen> {
           ),
           const SizedBox(height: 14),
           SignButton(label: tr(context, 'upload.button'), busy: _busy, busyLabel: tr(context, 'upload.busy'), onPressed: _submit),
+        ],
+      ),
+    );
+  }
+}
+
+/// "Unggah banyak sekaligus": like the website's batch page. Each file becomes its own
+/// trail named after the file; files go up one at a time so a weak signal copes.
+class BatchUploadScreen extends StatefulWidget {
+  const BatchUploadScreen({super.key});
+
+  @override
+  State<BatchUploadScreen> createState() => _BatchUploadScreenState();
+}
+
+enum _Item { waiting, skipped, uploading, done, failed }
+
+class _BatchUploadScreenState extends State<BatchUploadScreen> {
+  static const _max = 20;
+  final _files = <({String name, String? path})>[];
+  final _status = <int, (_Item, String?)>{};
+  bool _clean = true, _busy = false;
+
+  static String _title(String file) => file.replaceAll(RegExp(r'\.(gpx|xml)$', caseSensitive: false), '').replaceAll(RegExp(r'[_-]+'), ' ').trim();
+
+  Future<void> _pick() async {
+    final files = await FilePicker.pickFiles(type: FileType.any);
+    if (files.isEmpty) return;
+    setState(() {
+      _files
+        ..clear()
+        ..addAll(files.take(_max).map((f) => (name: f.name, path: f.path)));
+      _status.clear();
+      for (final (i, f) in _files.indexed) {
+        final ok = f.path != null && RegExp(r'\.(gpx|xml)$', caseSensitive: false).hasMatch(f.name);
+        _status[i] = ok ? (_Item.waiting, null) : (_Item.skipped, tr(context, 'upload.file_bad'));
+      }
+    });
+  }
+
+  Future<void> _upload() async {
+    final api = AppScope.read(context).api;
+    setState(() => _busy = true);
+    for (final (i, f) in _files.indexed) {
+      if (_status[i]?.$1 != _Item.waiting) continue;
+      setState(() => _status[i] = (_Item.uploading, null));
+      try {
+        final (route, _) = await api.upload(name: _title(f.name), path: f.path!, cleanTrack: _clean);
+        if (mounted) setState(() => _status[i] = (_Item.done, route.name));
+      } catch (e) {
+        if (mounted) setState(() => _status[i] = (_Item.failed, errorText(context, e)));
+      }
+      if (!mounted) return;
+    }
+    setState(() => _busy = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final waiting = _status.values.where((s) => s.$1 == _Item.waiting).length;
+    return Scaffold(
+      body: ListView(
+        padding: EdgeInsets.zero,
+        children: [
+          ContourHeader(
+            seed: 79,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const HeaderBar(),
+                const SizedBox(height: 12),
+                Semantics(
+                  header: true,
+                  child: Text(tr(context, 'batch.title').toUpperCase(), style: RS.head(40, color: Colors.white)),
+                ),
+                const SizedBox(height: 8),
+                Text(tr(context, 'batch.lead', {'n': _max}), style: const TextStyle(color: Color(0xFFD1FAE5), fontSize: 15, height: 1.4)),
+              ],
+            ),
+          ),
+          Padding(
+            padding: pageGutter(context, top: 20, bottom: 32),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _busy ? null : _pick,
+                  style: OutlinedButton.styleFrom(backgroundColor: Colors.white),
+                  icon: const Icon(Icons.folder_open, color: RS.z7),
+                  label: Text(tr(context, _files.isEmpty ? 'batch.pick' : 'upload.change')),
+                ),
+                if (_files.isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  Card(
+                    child: Column(
+                      children: [
+                        for (final (i, f) in _files.indexed)
+                          ListTile(
+                            minTileHeight: 56,
+                            leading: switch (_status[i]?.$1) {
+                              _Item.done => const Icon(Icons.check_circle, color: RS.z7),
+                              _Item.failed || _Item.skipped => const Icon(Icons.error_outline, color: RS.err),
+                              _Item.uploading => const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5)),
+                              _ => const Icon(Icons.route, color: RS.muted),
+                            },
+                            title: Text(_title(f.name), maxLines: 2, overflow: TextOverflow.ellipsis),
+                            subtitle: Text(switch (_status[i]?.$1) {
+                              _Item.done => tr(context, 'batch.done'),
+                              _Item.uploading => tr(context, 'upload.busy'),
+                              _Item.failed || _Item.skipped => _status[i]?.$2 ?? '',
+                              _ => f.name,
+                            }, style: TextStyle(color: (_status[i]?.$1 == _Item.failed || _status[i]?.$1 == _Item.skipped) ? RS.err : RS.muted)),
+                          ),
+                      ],
+                    ),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: _clean,
+                    onChanged: _busy ? null : (v) => setState(() => _clean = v),
+                    activeThumbColor: RS.z7,
+                    title: Text(tr(context, 'upload.clean'), style: const TextStyle(fontWeight: FontWeight.w700)),
+                    subtitle: Text(tr(context, 'upload.clean.hint'), style: const TextStyle(color: RS.muted)),
+                  ),
+                  const SizedBox(height: 10),
+                  SignButton(
+                    label: tr(context, 'batch.button', {'n': waiting}),
+                    busy: _busy,
+                    busyLabel: tr(context, 'upload.busy'),
+                    onPressed: waiting == 0 ? null : _upload,
+                  ),
+                ],
+              ],
+            ),
+          ),
         ],
       ),
     );

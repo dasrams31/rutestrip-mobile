@@ -1,10 +1,10 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart' hide Path;
 import 'package:material_ui/material_ui.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../api.dart';
 import '../app_state.dart';
@@ -13,6 +13,7 @@ import '../storage.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/contour_header.dart';
+import '../widgets/trail_map.dart';
 
 /// Route to follow while recording, set by "Rekam di jalur ini" on a route page.
 final followRoute = ValueNotifier<RouteDetail?>(null);
@@ -32,6 +33,8 @@ class RecordScreen extends StatefulWidget {
 class _RecordScreenState extends State<RecordScreen> {
   static const _maxAccuracyM = 30.0; // fixes worse than this are skipped
   static const _gainStepM = 3.0; // altitude changes smaller than this are GPS noise
+  static const _maxAgeS = 30; // older fixes are cached positions, not this walk
+  static const _maxSpeedMs = 15.0; // 54 km/h: faster jumps are GPS errors
 
   final _map = MapController();
   final _points = <TrackPoint>[];
@@ -43,6 +46,7 @@ class _RecordScreenState extends State<RecordScreen> {
   final _moving = Stopwatch();
   double _distanceM = 0, _gainM = 0;
   double? _refEle;
+  int _jumps = 0;
   String? _problem;
   bool _problemForever = false;
   bool _follow = true;
@@ -107,6 +111,8 @@ class _RecordScreenState extends State<RecordScreen> {
     _sub = Geolocator.getPositionStream(
       locationSettings: AndroidSettings(
         accuracy: LocationAccuracy.best,
+        // GPS chip directly: works in the mountains without mobile data or Play services.
+        forceLocationManager: true,
         distanceFilter: 5,
         intervalDuration: const Duration(seconds: 3),
         foregroundNotificationConfig: ForegroundNotificationConfig(
@@ -117,9 +123,27 @@ class _RecordScreenState extends State<RecordScreen> {
           notificationIcon: const AndroidResource(name: 'ic_launcher', defType: 'mipmap'),
         ),
       ),
-    ).listen(_onPosition, onError: (_) => setState(() => _problem = 'record.permission'));
+    ).listen(_onPosition, onError: _onLocationError);
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) => setState(() {}));
     setState(() => _status = _Status.recording);
+  }
+
+  /// The stream failed: stop cleanly and say why instead of looking like it still records.
+  void _onLocationError(Object e) {
+    if (kDebugMode) debugPrint('RuteStrip location error: $e');
+    _sub?.cancel();
+    _sub = null;
+    _ticker?.cancel();
+    _moving.stop();
+    if (!mounted) return;
+    setState(() {
+      _problem = switch (e) {
+        PermissionDeniedException() => 'record.permission',
+        LocationServiceDisabledException() => 'record.service_off',
+        _ => 'record.gps_error',
+      };
+      _status = _points.isEmpty ? _Status.idle : _Status.paused;
+    });
   }
 
   void _onPosition(Position p) {
@@ -128,9 +152,24 @@ class _RecordScreenState extends State<RecordScreen> {
     if (_status != _Status.recording || p.accuracy > _maxAccuracyM) return;
 
     final point = TrackPoint(p.latitude, p.longitude, p.altitude == 0 ? null : p.altitude, p.timestamp.toUtc());
+    // A cached fix from before the recording, or a jump no hiker can make, is not part of the walk.
+    if (DateTime.now().toUtc().difference(point.time).inSeconds > _maxAgeS) return;
     if (_points.isNotEmpty) {
       final prev = _points.last;
-      _distanceM += Geolocator.distanceBetween(prev.lat, prev.lng, point.lat, point.lng);
+      final step = Geolocator.distanceBetween(prev.lat, prev.lng, point.lat, point.lng);
+      final seconds = point.time.difference(prev.time).inMilliseconds / 1000;
+      if (seconds <= 0 || step / seconds > _maxSpeedMs) {
+        // Three jumps in a row from a lone first point: that first point was the bad one.
+        if (++_jumps >= 3 && _points.length == 1) {
+          _points.clear();
+          _jumps = 0;
+        } else {
+          return;
+        }
+      } else {
+        _jumps = 0;
+        _distanceM += step;
+      }
     }
     final ele = point.ele;
     if (ele != null) {
@@ -223,6 +262,7 @@ class _RecordScreenState extends State<RecordScreen> {
       _distanceM = 0;
       _gainM = 0;
       _refEle = null;
+      _jumps = 0;
       _startedAt = null;
       _moving.reset();
       _status = _Status.idle;
@@ -314,10 +354,7 @@ class _RecordScreenState extends State<RecordScreen> {
                           ),
                         ],
                       ),
-                    SimpleAttributionWidget(
-                      source: const Text('OpenStreetMap contributors'),
-                      onTap: () => launchUrl(Uri.parse('https://www.openstreetmap.org/copyright'), mode: LaunchMode.externalApplication),
-                    ),
+                    const OsmAttribution(),
                   ],
                 ),
                 if (here != null && !_follow)

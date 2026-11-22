@@ -2,11 +2,14 @@ import 'dart:math' as math;
 
 import 'package:material_ui/material_ui.dart';
 
+import 'package:url_launcher/url_launcher.dart';
+
 import '../api.dart';
 import '../app_state.dart';
 import '../i18n.dart';
 import '../screens/route_detail_screen.dart';
 import '../theme.dart';
+import 'trail_map.dart';
 
 /// Text for a failed request; server messages are already in the right language.
 String errorText(BuildContext context, Object error) {
@@ -228,10 +231,13 @@ class StatItem extends StatelessWidget {
 
 /// A route in a list: track line, rank, match word, difficulty, name, why, four numbers.
 class RouteCard extends StatelessWidget {
-  const RouteCard({super.key, required this.route, this.rank});
+  const RouteCard({super.key, required this.route, this.rank, this.map = false});
 
   final RouteSummary route;
   final int? rank;
+
+  /// Real map tiles under the track (search results); lists use the light line drawing.
+  final bool map;
 
   @override
   Widget build(BuildContext context) {
@@ -250,7 +256,7 @@ class RouteCard extends StatelessWidget {
           children: [
             Stack(
               children: [
-                TrackThumb(track: r.track),
+                map ? MiniMap(track: r.track) : TrackThumb(track: r.track),
                 if (rank != null)
                   Positioned(
                     left: 12,
@@ -425,7 +431,17 @@ class HeaderBar extends StatelessWidget {
         else
           Padding(
             padding: const EdgeInsets.only(left: 4),
-            child: Text('RuteStrip', style: RS.head(26, color: Colors.white)),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(7),
+                  child: Image.asset('assets/images/logo.png', width: 30, height: 30, cacheWidth: 90, excludeFromSemantics: true),
+                ),
+                const SizedBox(width: 8),
+                Text('RuteStrip', style: RS.head(26, color: Colors.white)),
+              ],
+            ),
           ),
         Expanded(
           child: title == null
@@ -441,4 +457,19 @@ class HeaderBar extends StatelessWidget {
       ],
     );
   }
+}
+
+/// Opens a link in the browser or the matching app. Only https (and tel:) links are
+/// opened, so a link from a message or the server cannot start anything else.
+Future<void> openExternal(String? url) async {
+  final uri = url == null ? null : Uri.tryParse(url);
+  if (uri == null || !(uri.scheme == 'https' || uri.scheme == 'tel')) return;
+  await launchUrl(uri, mode: LaunchMode.externalApplication);
+}
+
+/// Side padding that keeps content to a readable column on tablets and landscape.
+EdgeInsets pageGutter(BuildContext context, {double top = 0, double bottom = 0, double min = 16, double max = 760}) {
+  final w = MediaQuery.sizeOf(context).width;
+  final side = w > max + 2 * min ? (w - max) / 2 : min;
+  return EdgeInsets.fromLTRB(side, top, side, bottom);
 }

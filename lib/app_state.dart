@@ -1,12 +1,18 @@
+import 'dart:convert';
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api.dart';
 
-/// App-wide state: language, the signed-in user and the API client.
+/// App-wide state: language, onboarding, the signed-in user and the API client.
 class AppState extends ChangeNotifier {
-  AppState(this.api);
+  AppState(this.api) {
+    api.onUnauthorized = () {
+      if (user != null) signOut();
+    };
+  }
 
   final Api api;
   final _secure = const FlutterSecureStorage();
@@ -14,28 +20,47 @@ class AppState extends ChangeNotifier {
   String lang = 'id';
   AppUser? user;
   bool ready = false;
+  bool onboarded = true;
 
   bool get signedIn => user != null;
 
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
     lang = prefs.getString('lang') ?? 'id';
+    onboarded = prefs.getBool('onboarded') ?? false;
     api.lang = lang;
     try {
       final token = await _secure.read(key: 'sso_token');
+      final cached = await _secure.read(key: 'sso_user');
       if (token != null) {
         api.token = token;
-        user = await api.me();
+        // Start signed in with the saved profile, so the app also opens without signal.
+        if (cached != null) user = AppUser.fromJson(jsonDecode(cached) as Map);
+        try {
+          user = await api.me();
+          await _secure.write(key: 'sso_user', value: jsonEncode(user!.toJson()));
+        } on ApiException catch (e) {
+          if (e.kind == ApiError.unauthorized) {
+            user = null;
+            await _clear();
+          }
+          // Network or server trouble: keep the saved profile and token.
+        }
       }
-    } on ApiException catch (e) {
-      // An expired or revoked token signs the user out; a network error keeps the token for later.
-      if (e.status == 401) await _clearToken();
     } catch (_) {
       // Secure storage can fail after a backup restore; start signed out.
-      await _clearToken();
+      user = null;
+      await _clear();
     }
     ready = true;
     notifyListeners();
+  }
+
+  Future<void> finishOnboarding() async {
+    onboarded = true;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('onboarded', true);
   }
 
   Future<void> setLang(String value) async {
@@ -45,25 +70,35 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('lang', value);
+    // Same account language on the website and the chat; failure here is harmless.
+    if (signedIn) api.updateLocale(value).catchError((_) {});
   }
 
   Future<void> signIn(AuthResult result) async {
     api.token = result.token;
     user = result.user;
     await _secure.write(key: 'sso_token', value: result.token);
+    await _secure.write(key: 'sso_user', value: jsonEncode(result.user.toJson()));
+    notifyListeners();
+  }
+
+  Future<void> updateUser(AppUser value) async {
+    user = value;
+    await _secure.write(key: 'sso_user', value: jsonEncode(value.toJson()));
     notifyListeners();
   }
 
   Future<void> signOut() async {
     user = null;
-    await _clearToken();
+    await _clear();
     notifyListeners();
   }
 
-  Future<void> _clearToken() async {
+  Future<void> _clear() async {
     api.token = null;
     try {
       await _secure.delete(key: 'sso_token');
+      await _secure.delete(key: 'sso_user');
     } catch (_) {}
   }
 }

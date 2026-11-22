@@ -7,6 +7,7 @@ import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/contour_header.dart';
 import 'results_screen.dart';
+import 'routes_screen.dart';
 import 'shell.dart';
 
 /// Search by sentence: the one focal point is the search box and its yellow button.
@@ -21,6 +22,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final _query = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   Future<Filters>? _filters;
+  Future<Dashboard>? _dash;
   String? _filtersLang;
 
   @override
@@ -30,6 +32,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_filtersLang != state.lang) {
       _filtersLang = state.lang;
       _filters = state.api.filters()..ignore();
+      _dash = state.api.dashboard()..ignore();
     }
   }
 
@@ -43,7 +46,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (text != null) _query.text = text;
     if (!(_formKey.currentState?.validate() ?? false)) return;
     FocusScope.of(context).unfocus();
-    Navigator.of(context).push(MaterialPageRoute(builder: (_) => ResultsScreen(query: _query.text.trim())));
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => ResultsScreen(query: _query.text.trim().replaceAll(RegExp(r'\s+'), ' '))));
   }
 
   @override
@@ -117,7 +120,7 @@ class _HomeScreenState extends State<HomeScreen> {
             builder: (context, snap) {
               final examples = snap.data?.examples ?? fallbackExamples;
               return Padding(
-                padding: const EdgeInsets.fromLTRB(20, 24, 20, 32),
+                padding: pageGutter(context, top: 24, bottom: 32, min: 20),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -138,8 +141,10 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                       ],
                     ),
+                    _RecentSearches(future: _dash, onSearch: _search),
                     const SizedBox(height: 28),
                     _BrowseCard(filters: snap.data, loading: snap.connectionState == ConnectionState.waiting),
+                    if (snap.data != null && snap.data!.mountains.isNotEmpty) _Mountains(filters: snap.data!),
                   ],
                 ),
               );
@@ -163,7 +168,7 @@ class _BrowseCard extends StatelessWidget {
     return Card(
       child: InkWell(
         borderRadius: BorderRadius.circular(10),
-        onTap: () => Shell.globalKey.currentState?.open(1),
+        onTap: () => Shell.globalKey.currentState?.open(Tabs.routes),
         child: Padding(
           padding: const EdgeInsets.all(18),
           child: Row(
@@ -187,6 +192,89 @@ class _BrowseCard extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// The signed-in user's last searches (server history), one tap to run again.
+class _RecentSearches extends StatelessWidget {
+  const _RecentSearches({required this.future, required this.onSearch});
+
+  final Future<Dashboard>? future;
+  final void Function(String) onSearch;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Dashboard>(
+      future: future,
+      builder: (context, snap) {
+        final recent = snap.data?.recent ?? const <SearchEntry>[];
+        if (recent.isEmpty) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.only(top: 22),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(tr(context, 'dash.recent'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+              const SizedBox(height: 8),
+              for (final h in recent.take(3))
+                InkWell(
+                  onTap: () => onSearch(h.query),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 48),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.history, color: RS.z7, size: 20),
+                        const SizedBox(width: 10),
+                        Expanded(child: Text(h.query, style: const TextStyle(fontSize: 15))),
+                        const Icon(Icons.north_west, color: RS.muted, size: 18),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Mountains with the most trails (counts from the server); opens Jalur filtered.
+class _Mountains extends StatelessWidget {
+  const _Mountains({required this.filters});
+
+  final Filters filters;
+
+  @override
+  Widget build(BuildContext context) {
+    final top = [...filters.mountains]..sort((a, b) => b.count.compareTo(a.count));
+    return Padding(
+      padding: const EdgeInsets.only(top: 22),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(tr(context, 'home.mountains'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final m in top.take(8))
+                ActionChip(
+                  materialTapTargetSize: MaterialTapTargetSize.padded,
+                  backgroundColor: Colors.white,
+                  side: const BorderSide(color: RS.line),
+                  label: Text('${m.name.replaceFirst('Gunung ', '')} · ${m.count}'),
+                  onPressed: () {
+                    routesFilter.value = m.name;
+                    Shell.globalKey.currentState?.open(Tabs.routes);
+                  },
+                ),
+            ],
+          ),
+        ],
       ),
     );
   }

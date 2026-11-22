@@ -6,6 +6,8 @@ import '../i18n.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/contour_header.dart';
+import '../widgets/trail_map.dart';
+import 'route_detail_screen.dart';
 import 'routes_screen.dart';
 
 /// Search results with the same plan sentences the website shows above the cards.
@@ -99,12 +101,13 @@ class _ResultsScreenState extends State<ResultsScreen> {
                 SliverToBoxAdapter(
                   child: _Plan(result: data, query: widget.query),
                 ),
+                SliverToBoxAdapter(child: _Overview(routes: data.results)),
                 SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+                  padding: pageGutter(context, top: 0, bottom: 32),
                   sliver: SliverList.separated(
                     itemCount: data.results.length,
                     separatorBuilder: (_, _) => const SizedBox(height: 14),
-                    itemBuilder: (context, i) => RouteCard(route: data.results[i], rank: i + 1),
+                    itemBuilder: (context, i) => RouteCard(route: data.results[i], rank: i + 1, map: true),
                   ),
                 ),
               ],
@@ -168,6 +171,67 @@ class _Plan extends StatelessWidget {
           ],
         ],
       ),
+    );
+  }
+}
+
+void _openRoute(BuildContext context, RouteSummary r) => Navigator.of(context).push(
+  MaterialPageRoute(
+    builder: (_) => RouteDetailScreen(id: r.id, name: r.name),
+  ),
+);
+
+/// All results on one map (numbers = rank); "Buka peta penuh" makes it interactive.
+class _Overview extends StatelessWidget {
+  const _Overview({required this.routes});
+
+  final List<RouteSummary> routes;
+
+  @override
+  Widget build(BuildContext context) {
+    if (routes.where((r) => r.track.length >= 2).isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: pageGutter(context, bottom: 16),
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SizedBox(
+              height: 210,
+              child: RepaintBoundary(
+                child: ResultsMap(routes: routes, onOpen: (r) => _openRoute(context, r)),
+              ),
+            ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => _ResultsMapScreen(routes: routes))),
+                icon: const Icon(Icons.fullscreen),
+                label: Text(tr(context, 'detail.map.open')),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ResultsMapScreen extends StatelessWidget {
+  const _ResultsMapScreen({required this.routes});
+
+  final List<RouteSummary> routes;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: RS.z9,
+        foregroundColor: Colors.white,
+        title: Text(tr(context, 'detail.map'), style: RS.head(24, color: Colors.white)),
+      ),
+      body: ResultsMap(routes: routes, interactive: true, onOpen: (r) => _openRoute(context, r)),
     );
   }
 }

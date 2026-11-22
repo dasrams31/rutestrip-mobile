@@ -21,7 +21,14 @@ class ContourHeader extends StatelessWidget {
         painter: _ContourPainter(seed),
         child: SafeArea(
           bottom: false,
-          child: Padding(padding: padding, child: child),
+          // Same readable column as the page body on tablets and landscape.
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 792),
+              child: Padding(padding: padding, child: child),
+            ),
+          ),
         ),
       ),
     );

@@ -1,5 +1,4 @@
 import 'package:material_ui/material_ui.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../api.dart';
 import '../app_state.dart';
@@ -8,6 +7,7 @@ import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/contour_header.dart';
 import '../widgets/elevation_chart.dart';
+import '../widgets/route_sections.dart';
 import '../widgets/trail_map.dart';
 import '../storage.dart';
 import 'login_screen.dart';
@@ -93,7 +93,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
   void _recordHere(RouteDetail r) {
     followRoute.value = r;
     Navigator.of(context).popUntil((route) => route.isFirst);
-    Shell.globalKey.currentState?.open(2);
+    Shell.globalKey.currentState?.open(Tabs.record);
   }
 
   String _date(DateTime d) => '${d.day}/${d.month}/${d.year}';
@@ -122,6 +122,11 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
           _liked = liked;
           _likes = count;
         });
+        // Keep the saved copy in step with the new like.
+        if (_saved && _json != null) {
+          _json = {..._json!, 'liked': liked, 'likes_count': count};
+          OfflineStore.save(_json!);
+        }
       }
     } on ApiException catch (e) {
       if (!mounted) return;
@@ -150,7 +155,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
                 )
               else
                 SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+                  padding: pageGutter(context, top: 16, bottom: 32),
                   sliver: SliverList.list(children: _body(context, r!)),
                 ),
             ],
@@ -283,6 +288,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
             ),
         ],
       ),
+      if (_offlineFrom == null) ...[const SizedBox(height: 14), ConditionsSection(routeId: r.id)],
       const SizedBox(height: 14),
       Card(
         child: Padding(
@@ -353,13 +359,35 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
             ? ElevationChart(profile: r.profile)
             : Text(tr(context, 'detail.profile.none'), style: const TextStyle(color: RS.muted, height: 1.4)),
       ),
-      if ((r.description ?? r.narrative ?? '').trim().isNotEmpty) ...[
-        const SizedBox(height: 14),
-        _Section(
-          title: tr(context, 'detail.about'),
-          child: Text((r.description?.trim().isNotEmpty ?? false) ? r.description! : r.narrative!, style: const TextStyle(fontSize: 15, height: 1.5)),
+      PracticalSection(info: r.practical),
+      const SizedBox(height: 14),
+      _Section(
+        title: tr(context, 'detail.about'),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if ((r.description ?? '').trim().isNotEmpty) ...[
+              Text(
+                tr(context, 'about.notes'),
+                style: const TextStyle(fontSize: 13, color: RS.muted, fontWeight: FontWeight.w600),
+              ),
+              Text(r.description!, style: const TextStyle(fontSize: 15, height: 1.5)),
+              const SizedBox(height: 10),
+            ],
+            Text(
+              tr(context, 'about.summary'),
+              style: const TextStyle(fontSize: 13, color: RS.muted, fontWeight: FontWeight.w600),
+            ),
+            Text((r.narrative ?? '').trim().isEmpty ? tr(context, 'about.none') : r.narrative!, style: const TextStyle(fontSize: 15, height: 1.5)),
+            if (r.uploader != null) ...[
+              const SizedBox(height: 10),
+              Text(tr(context, 'about.uploader', {'name': r.uploader}), style: const TextStyle(fontSize: 13.5, color: RS.muted)),
+            ],
+          ],
         ),
-      ],
+      ),
+      const SizedBox(height: 14),
+      ReviewsSection(routeId: r.id, offline: _offlineFrom != null),
       const SizedBox(height: 14),
       _Section(
         title: tr(context, 'detail.similar'),
@@ -367,12 +395,9 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
             ? Text(tr(context, 'detail.similar.none'), style: const TextStyle(color: RS.muted))
             : Column(children: [for (final s in r.similar) _SimilarTile(route: s)]),
       ),
+      if (_offlineFrom == null) ...[const SizedBox(height: 14), VersionsSection(routeId: r.id)],
       const SizedBox(height: 18),
-      OutlinedButton.icon(
-        onPressed: () => launchUrl(Uri.parse(r.webUrl), mode: LaunchMode.externalApplication),
-        icon: const Icon(Icons.open_in_new),
-        label: Text(tr(context, 'detail.web')),
-      ),
+      OutlinedButton.icon(onPressed: () => openExternal(r.webUrl), icon: const Icon(Icons.open_in_new), label: Text(tr(context, 'detail.web'))),
     ];
   }
 }
