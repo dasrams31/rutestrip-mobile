@@ -45,6 +45,8 @@ class NearbyTransport implements MeshTransport {
       Permission.nearbyWifiDevices,
     ];
     final result = await wanted.request();
+    // The group notification and SOS alerts; the group still works if this is refused.
+    await Permission.notification.request();
     // Permissions that do not exist on this Android version come back as granted or restricted.
     return result.values.every((s) => s.isGranted || s.isLimited || s.isRestricted);
   }

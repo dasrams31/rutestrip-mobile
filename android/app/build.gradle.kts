@@ -6,12 +6,14 @@ plugins {
 
 android {
     namespace = "id.ai.rutestrip.rutestrip"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 37 // some plugins (notifications, scanner) need API 37 to compile; runs on older Android
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // flutter_local_notifications uses java.time on older Android versions.
+        isCoreLibraryDesugaringEnabled = true
     }
 
     defaultConfig {
@@ -46,4 +48,8 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 }

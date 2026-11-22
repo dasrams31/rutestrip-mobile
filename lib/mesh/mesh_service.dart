@@ -8,6 +8,11 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'package:battery_plus/battery_plus.dart';
+
+import '../i18n.dart';
+import '../location_hub.dart';
+import '../notify.dart';
 import '../recording_math.dart';
 import 'mesh_node.dart';
 import 'mesh_protocol.dart';
@@ -23,6 +28,13 @@ class MeshMember {
   double? lat, lng, accuracy;
   DateTime? posTime;
   int hops = 0;
+
+  /// Phone battery in percent, as last reported with a position.
+  int? battery;
+
+  /// The last few positions, oldest first (drawn as a dotted trail on the map).
+  final trail = <List<double>>[];
+  static const trailMax = 10;
 
   bool get hasPosition => lat != null && lng != null;
 }
@@ -61,6 +73,13 @@ class MeshService extends ChangeNotifier {
   /// Teammates with an active SOS (latest per member).
   final sos = <String, MeshMessage>{};
   bool mySos = false;
+
+  /// The group's pinned note (latest), shown above the chat.
+  MeshMessage? pinned;
+
+  final _pingAt = <String, DateTime>{};
+
+  static double? _num(Object? v) => v is num && v.isFinite ? v.toDouble() : null;
   Position? myPosition;
   DateTime _posSentAt = DateTime.fromMillisecondsSinceEpoch(0);
   Position? _posSent;
@@ -136,7 +155,9 @@ class MeshService extends ChangeNotifier {
     members.clear();
     chat.clear();
     sos.clear();
+    pinned = null;
     mySos = false;
+    await Notify.instance.stopSiren();
     await _secure.delete(key: 'mesh_group');
     if (g != null) {
       final f = await _chatFile(g);
@@ -190,6 +211,7 @@ class MeshService extends ChangeNotifier {
   Future<void> _teardown() async {
     await _posSub?.cancel();
     _posSub = null;
+    LocationHub.instance.release(this);
     await _msgSub?.cancel();
     _msgSub = null;
     await _peerSub?.cancel();
@@ -208,6 +230,42 @@ class MeshService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Sends where this phone is now into the chat (with a "show on map" button).
+  Future<bool> shareLocation({String? label}) async {
+    if (_node == null) return false;
+    final p = myPosition ?? await _currentPosition();
+    if (p == null) return false;
+    final m = await _node!.send(MeshType.chat, {'text': label ?? '', 'lat': p.latitude, 'lng': p.longitude, 'acc': p.accuracy});
+    _addChat(m);
+    notifyListeners();
+    return true;
+  }
+
+  /// A marked spot from Rekam (water, pos, camp...) shared with the group.
+  Future<void> shareSpot(String label, double lat, double lng) async {
+    if (_node == null) return;
+    final m = await _node!.send(MeshType.chat, {'text': label, 'lat': lat, 'lng': lng});
+    _addChat(m);
+    notifyListeners();
+  }
+
+  /// Team call: buzz and a short siren on every phone ("Kumpul!", "Tunggu!").
+  Future<void> sendPing(String text) async {
+    if (_node == null) return;
+    final m = await _node!.send(MeshType.ping, {'text': text.trim().length > 120 ? text.trim().substring(0, 120) : text.trim()});
+    _addChat(m);
+    notifyListeners();
+  }
+
+  /// Pins a note for everyone (empty text removes it).
+  Future<void> setPinned(String text) async {
+    if (_node == null) return;
+    final t = text.trim();
+    final m = await _node!.send(MeshType.pin, {'text': t.length > 200 ? t.substring(0, 200) : t});
+    pinned = t.isEmpty ? null : m;
+    notifyListeners();
+  }
+
   /// Starts or ends this phone's SOS; the position goes with it.
   Future<void> setSos(bool active) async {
     if (_node == null) return;
@@ -219,6 +277,7 @@ class MeshService extends ChangeNotifier {
 
   void dismissSos(String memberId) {
     sos.remove(memberId);
+    if (sos.isEmpty) Notify.instance.stopSiren();
     notifyListeners();
   }
 
@@ -230,9 +289,14 @@ class MeshService extends ChangeNotifier {
       ..name = m.name
       ..hops = m.hops;
     if (m.time.isAfter(member.lastSeen)) member.lastSeen = m.time;
+    final lang = Notify.instance.lang;
+    final text = '${m.body['text'] ?? ''}';
+    // Messages carried for a while by other phones arrive late: no sound for old news.
+    final recent = DateTime.now().difference(m.time) < const Duration(minutes: 10);
     switch (m.type) {
       case MeshType.chat:
         _addChat(m);
+        if (recent) Notify.instance.groupMessage('${m.name} · ${group?.name ?? ''}', text.isNotEmpty ? text : trLang(lang, 'grp.loc.msg'));
       case MeshType.pos:
         _takePosition(member, m);
       case MeshType.sos:
@@ -240,10 +304,25 @@ class MeshService extends ChangeNotifier {
         if (m.body['active'] == true) {
           final isNew = !sos.containsKey(m.from);
           sos[m.from] = m;
-          if (isNew) _alarm();
+          if (isNew) {
+            _alarm();
+            Notify.instance.sos(trLang(lang, 'grp.sos.in', {'name': m.name, 'd': ''}), trLang(lang, 'notif.sos.body'));
+          }
         } else {
           sos.remove(m.from);
+          if (sos.isEmpty) Notify.instance.stopSiren();
         }
+      case MeshType.ping:
+        _addChat(m);
+        // At most one buzz and siren per teammate every 30 seconds.
+        final last = _pingAt[m.from];
+        if (recent && (last == null || DateTime.now().difference(last) > const Duration(seconds: 30))) {
+          _pingAt[m.from] = DateTime.now();
+          _alarm();
+          Notify.instance.ping(trLang(lang, 'grp.ping.in', {'name': m.name}), text);
+        }
+      case MeshType.pin:
+        if (pinned == null || !m.time.isBefore(pinned!.time)) pinned = text.isEmpty ? null : m;
       case MeshType.hello:
         break;
     }
@@ -251,14 +330,17 @@ class MeshService extends ChangeNotifier {
   }
 
   void _takePosition(MeshMember member, MeshMessage m) {
-    final lat = (m.body['lat'] as num?)?.toDouble(), lng = (m.body['lng'] as num?)?.toDouble();
+    final lat = _num(m.body['lat']), lng = _num(m.body['lng']);
     if (lat == null || lng == null || lat.abs() > 90 || lng.abs() > 180) return;
     if (member.posTime != null && !m.time.isAfter(member.posTime!)) return; // an older position relayed late
     member
       ..lat = lat
       ..lng = lng
-      ..accuracy = (m.body['acc'] as num?)?.toDouble()
+      ..accuracy = _num(m.body['acc'])
+      ..battery = _num(m.body['bat'])?.round().clamp(0, 100) ?? member.battery
       ..posTime = m.time;
+    member.trail.add([lat, lng]);
+    if (member.trail.length > MeshMember.trailMax) member.trail.removeAt(0);
   }
 
   Future<void> _alarm() async {
@@ -287,22 +369,32 @@ class MeshService extends ChangeNotifier {
 
   void _startPositions() {
     _posSub?.cancel();
-    _posSub =
-        Geolocator.getPositionStream(
-          locationSettings: AndroidSettings(accuracy: LocationAccuracy.high, forceLocationManager: true, distanceFilter: 10, intervalDuration: posEvery),
-        ).listen((p) {
-          myPosition = p;
-          notifyListeners();
-          final prev = _posSent;
-          final moved = prev == null ? double.infinity : distanceM(prev.latitude, prev.longitude, p.latitude, p.longitude);
-          final since = DateTime.now().difference(_posSentAt);
-          // Every 30 s when walking (25 m or more), at least every 3 minutes when resting.
-          if (p.accuracy <= 50 && ((moved >= posMinMove && since >= posEvery) || since >= const Duration(minutes: 3))) {
-            _posSent = p;
-            _posSentAt = DateTime.now();
-            _node?.send(MeshType.pos, {'lat': p.latitude, 'lng': p.longitude, 'acc': p.accuracy});
-          }
-        }, onError: (_) {});
+    // The app's one GPS stream; the group need keeps a foreground service ("Rombongan aktif")
+    // so messages and SOS still arrive with the screen off.
+    LocationHub.instance
+      ..groupName = group?.name ?? ''
+      ..require(this, LocNeed.group);
+    _posSub = LocationHub.instance.positions.listen((p) {
+      myPosition = p;
+      notifyListeners();
+      final prev = _posSent;
+      final moved = prev == null ? double.infinity : distanceM(prev.latitude, prev.longitude, p.latitude, p.longitude);
+      final since = DateTime.now().difference(_posSentAt);
+      // Every 30 s when walking (25 m or more), at least every 3 minutes when resting.
+      if (p.accuracy <= 50 && ((moved >= posMinMove && since >= posEvery) || since >= const Duration(minutes: 3))) {
+        _posSent = p;
+        _posSentAt = DateTime.now();
+        _sendPos(p);
+      }
+    }, onError: (_) {});
+  }
+
+  Future<void> _sendPos(Position p) async {
+    int? bat;
+    try {
+      bat = await Battery().batteryLevel;
+    } catch (_) {}
+    await _node?.send(MeshType.pos, {'lat': p.latitude, 'lng': p.longitude, 'acc': p.accuracy, 'bat': ?bat});
   }
 
   /// Distance from this phone to a member (metres), when both positions are known.
@@ -327,7 +419,7 @@ class MeshService extends ChangeNotifier {
     if (g == null) return;
     try {
       final data = chat
-          .map((m) => {'id': m.id, 'from': m.from, 'name': m.name, 't': m.time.millisecondsSinceEpoch, 'text': m.body['text'], 'hops': m.hops})
+          .map((m) => {'id': m.id, 'from': m.from, 'name': m.name, 't': m.time.millisecondsSinceEpoch, 'type': m.type.name, 'body': m.body, 'hops': m.hops})
           .toList();
       await (await _chatFile(g)).writeAsString(jsonEncode(data));
     } catch (_) {}
@@ -346,8 +438,8 @@ class MeshService extends ChangeNotifier {
             from: '${j['from']}',
             name: '${j['name']}',
             time: DateTime.fromMillisecondsSinceEpoch((j['t'] as num).toInt()),
-            type: MeshType.chat,
-            body: {'text': '${j['text']}'},
+            type: j['type'] == 'ping' ? MeshType.ping : MeshType.chat,
+            body: j['body'] is Map ? Map<String, dynamic>.from(j['body'] as Map) : {'text': '${j['text'] ?? ''}'},
             hops: (j['hops'] as num?)?.toInt() ?? 0,
           ),
         );

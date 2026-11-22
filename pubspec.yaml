@@ -52,6 +52,11 @@ dependencies:
   permission_handler: ^12.0.1
   nearby_connections: ^4.3.0
   cryptography: ^2.9.0
+  flutter_local_notifications: ^23.0.3
+  audioplayers: ^6.8.1
+  battery_plus: ^7.1.2
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^7.5.0
 
 dev_dependencies:
   flutter_test:
@@ -78,6 +83,7 @@ flutter:
   # The website's own app icon (public/images/icons/icon-512.png), used as the logo.
   assets:
     - assets/images/logo.png
+    - assets/sounds/siren.wav
 
   # Same OFL fonts as the website (public/fonts, from Fontsource), converted to TTF.
   fonts:

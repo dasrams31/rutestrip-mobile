@@ -96,7 +96,14 @@ void main() {
         ..lat = -7.45
         ..lng = 110.43;
       mesh.members['n1'] = m;
-      mesh.sos['n1'] = MeshMessage(id: 's1', from: 'n1', name: 'Budi', time: DateTime.now(), type: MeshType.sos, body: {'active': true, 'lat': -7.45, 'lng': 110.43});
+      mesh.sos['n1'] = MeshMessage(
+        id: 's1',
+        from: 'n1',
+        name: 'Budi',
+        time: DateTime.now(),
+        type: MeshType.sos,
+        body: {'active': true, 'lat': -7.45, 'lng': 110.43},
+      );
       MeshMember? shown;
       await pump(tester, Scaffold(body: SosBanner(onShow: (x) => shown = x)), lang);
       expect(find.textContaining('Budi'), findsOneWidget);

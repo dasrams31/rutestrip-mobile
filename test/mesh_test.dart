@@ -6,6 +6,7 @@ import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rutestrip/mesh/mesh_node.dart';
 import 'package:rutestrip/mesh/mesh_protocol.dart';
+import 'package:rutestrip/screens/qr_scan_screen.dart' show GroupInvite;
 
 Future<MeshNode> _node(MemoryHub hub, String id, MeshGroup group, {int seed = 1}) async {
   final identity = await MeshIdentity.fromSeed(List.generate(32, (i) => (i * seed + seed) % 256));
@@ -180,5 +181,36 @@ void main() {
     await a.receive('X', Uint8List.fromList(List.filled(MeshProtocol.maxPacketBytes + 1, 65)));
     await a.receive('X', Uint8List.fromList([0, 1, 2]));
     expect(a.rejected, 3);
+  });
+
+  test('team call, pinned note and location travel like chat; long text is cut on arrival', () async {
+    final me = await MeshIdentity.fromSeed(List.filled(32, 9));
+    final codec = MeshCodec(group, me);
+    for (final (type, body) in [
+      (MeshType.ping, {'text': 'Kumpul!'}),
+      (MeshType.pin, {'text': 'Kumpul di pos 3 jam 14.00'}),
+      (MeshType.chat, {'text': '', 'lat': -7.45, 'lng': 110.43}),
+    ]) {
+      final bytes = await codec.seal(id: 'p-${type.name}', type: type, body: body, name: 'Rama', time: DateTime.now());
+      final msg = (await codec.open(MeshCodec.peek(bytes)!.raw))!;
+      expect(msg.type, type);
+      expect(msg.body, body);
+    }
+    final long = await codec.seal(id: 'long', type: MeshType.chat, body: {'text': 'a' * 900}, name: 'R', time: DateTime.now());
+    expect(((await codec.open(MeshCodec.peek(long)!.raw))!.body['text'] as String).length, MeshProtocol.maxTextLength);
+    final odd = await codec.seal(id: 'odd', type: MeshType.chat, body: {'text': 42}, name: 'R', time: DateTime.now());
+    expect((await codec.open(MeshCodec.peek(odd)!.raw))!.body.containsKey('text'), isFalse);
+  });
+
+  test('group QR carries the code and name, and only our own format is accepted', () {
+    final qr = const GroupInvite('ABCDE23456', 'Merbabu: Sabtu').encode();
+    final back = GroupInvite.parse(qr)!;
+    expect(back.code, 'ABCDE23456');
+    expect(back.name, 'Merbabu: Sabtu'); // a colon in the name survives
+    expect(GroupInvite.parse('rutestrip-group:abcde-23456')!.code, 'ABCDE23456');
+    expect(GroupInvite.parse('https://example.com'), isNull);
+    expect(GroupInvite.parse('rutestrip-group:ABCDE2345O:x'), isNull); // not a valid code
+    expect(GroupInvite.parse('rutestrip-group:ABCDE23456:${'n' * 80}')!.name.length, 40);
+    expect(GroupInvite.parse(null), isNull);
   });
 }

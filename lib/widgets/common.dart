@@ -231,7 +231,7 @@ class StatItem extends StatelessWidget {
 
 /// A route in a list: track line, rank, match word, difficulty, name, why, four numbers.
 class RouteCard extends StatelessWidget {
-  const RouteCard({super.key, required this.route, this.rank, this.map = false});
+  const RouteCard({super.key, required this.route, this.rank, this.map = true});
 
   final RouteSummary route;
   final int? rank;

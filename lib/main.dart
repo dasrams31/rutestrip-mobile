@@ -4,6 +4,9 @@ import 'package:material_ui/material_ui.dart';
 
 import 'api.dart';
 import 'app_state.dart';
+import 'location_hub.dart';
+import 'notify.dart';
+import 'screens/chat_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'mesh/mesh_service.dart';
@@ -25,6 +28,25 @@ Future<void> main() async {
     };
   runApp(RuteStripApp(state: state));
   await state.load();
+  _syncLang(state);
+  state.addListener(() => _syncLang(state));
+  Notify.instance
+    ..onTap = (payload) {
+      rootNavigator.currentState?.popUntil((r) => r.isFirst);
+      chatPane.value = 2; // the group pane
+      Shell.globalKey.currentState?.open(Tabs.chat);
+    }
+    ..init();
+}
+
+/// Notification texts follow the app language.
+void _syncLang(AppState state) {
+  Notify.instance.lang = state.lang;
+  final hub = LocationHub.instance;
+  if (hub.lang != state.lang) {
+    hub.lang = state.lang;
+    hub.refresh();
+  }
 }
 
 class RuteStripApp extends StatelessWidget {

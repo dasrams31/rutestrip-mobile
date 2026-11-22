@@ -168,11 +168,20 @@ class Api {
   // --- GPX upload ------------------------------------------------------------------
 
   /// Multipart POST /api/v1/routes. Processing on the server can take a while.
-  Future<(RouteSummary, String)> upload({required String name, String? description, required String path, bool cleanTrack = true}) async {
+  /// [recording]: a hike recorded in this app; the server processes it but shows it
+  /// only after an admin approves, so no route comes back (null).
+  Future<(RouteSummary?, String)> upload({
+    required String name,
+    String? description,
+    required String path,
+    bool cleanTrack = true,
+    bool recording = false,
+  }) async {
     final req = http.MultipartRequest('POST', Uri.parse('$baseUrl/api/v1/routes'))
       ..headers.addAll(_headers)
       ..fields['name'] = name
-      ..fields['clean_track'] = cleanTrack ? '1' : '0';
+      ..fields['clean_track'] = cleanTrack ? '1' : '0'
+      ..fields['source'] = recording ? 'recording' : 'upload';
     if (description != null && description.trim().isNotEmpty) req.fields['description'] = description.trim();
     req.files.add(await http.MultipartFile.fromPath('gpx_file', path));
 
@@ -186,9 +195,13 @@ class Api {
     } on http.ClientException {
       throw const ApiException(ApiError.network);
     }
-    final data = _decode(res);
-    return (RouteSummary.fromJson((data as Map)['data'] as Map), '${data['message'] ?? ''}');
+    final data = _decode(res) as Map;
+    return (recording ? null : RouteSummary.fromJson(data['data'] as Map), '${data['message'] ?? ''}');
   }
+
+  /// GET /api/v1/me/submissions: uploads and recordings sent from this account, with review status.
+  Future<List<Submission>> submissions() async =>
+      ((await _send('GET', '/api/v1/me/submissions') as Map)['data'] as List).map((e) => Submission.fromJson(e as Map)).toList();
 
   // --- community chat (Obrolan Pendaki) and assistant -----------------------------
 
@@ -537,6 +550,22 @@ class GpxVersionInfo {
   final String? status, statusLabel, changeLog, downloadUrl;
   final String hash, uploader;
   final DateTime? createdAt;
+}
+
+class Submission {
+  Submission.fromJson(Map j)
+    : id = _i(j['id']) ?? 0,
+      name = '${j['name'] ?? ''}',
+      distanceKm = (j['distance_km'] as num?)?.toDouble(),
+      gainM = (j['elevation_gain_m'] as num?)?.toDouble(),
+      source = '${j['source'] ?? 'upload'}',
+      status = '${j['status'] ?? 'published'}',
+      note = j['note'] == null ? null : '${j['note']}';
+
+  final int id;
+  final String name, source, status;
+  final double? distanceKm, gainM;
+  final String? note;
 }
 
 class SearchEntry {

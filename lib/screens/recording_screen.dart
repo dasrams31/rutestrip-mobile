@@ -245,7 +245,7 @@ class _RecordingScreenState extends State<RecordingScreen> {
                       onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => UploadScreen(recording: r))),
                       style: OutlinedButton.styleFrom(backgroundColor: Colors.white),
                       icon: const Icon(Icons.upload_file, color: RS.z7),
-                      label: Text(tr(context, 'me.recording.upload')),
+                      label: Text(tr(context, r.imported ? 'me.recording.upload' : 'rec.submit')),
                     ),
                     OutlinedButton.icon(
                       onPressed: _rename,

@@ -9,6 +9,7 @@ import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/contour_header.dart';
 import 'route_detail_screen.dart';
+import 'submissions_screen.dart';
 
 /// Upload one GPX (picked from the phone or from a GPS recording) to RuteStrip.
 class UploadScreen extends StatefulWidget {
@@ -28,6 +29,10 @@ class _UploadScreenState extends State<UploadScreen> {
   bool _clean = true, _busy = false;
   RouteSummary? _done;
   String? _doneMessage;
+  bool _sent = false; // a recording sent for review (no route to open yet)
+
+  /// A hike recorded in this app (not an imported file): goes to the admin first.
+  bool get _isRecording => widget.recording != null && !widget.recording!.imported;
 
   @override
   void initState() {
@@ -76,10 +81,12 @@ class _UploadScreenState extends State<UploadScreen> {
     if (!_form.currentState!.validate() || _path == null) return;
     setState(() => _busy = true);
     try {
-      final (route, message) = await AppScope.read(context).api.upload(name: _name.text.trim(), description: _notes.text, path: _path!, cleanTrack: _clean);
+      final (route, message) = await AppScope.read(context).api
+          .upload(name: _name.text.trim(), description: _notes.text, path: _path!, cleanTrack: _clean, recording: _isRecording);
       if (mounted) {
         setState(() {
           _done = route;
+          _sent = route == null;
           _doneMessage = message;
         });
       }
@@ -110,16 +117,38 @@ class _UploadScreenState extends State<UploadScreen> {
                 const SizedBox(height: 12),
                 Semantics(
                   header: true,
-                  child: Text(tr(context, 'upload.title').toUpperCase(), style: RS.head(40, color: Colors.white)),
+                  child: Text(tr(context, _isRecording ? 'rec.submit' : 'upload.title').toUpperCase(), style: RS.head(40, color: Colors.white)),
                 ),
                 const SizedBox(height: 8),
-                Text(tr(context, 'upload.lead'), style: const TextStyle(color: Color(0xFFD1FAE5), fontSize: 15, height: 1.4)),
+                Text(
+                  tr(context, _isRecording ? 'upload.review.lead' : 'upload.lead'),
+                  style: const TextStyle(color: Color(0xFFD1FAE5), fontSize: 15, height: 1.4),
+                ),
               ],
             ),
           ),
-          Padding(padding: pageGutter(context, top: 22, bottom: 32, min: 20), child: _done != null ? _success(context) : _formView(context)),
+          Padding(
+            padding: pageGutter(context, top: 22, bottom: 32, min: 20),
+            child: _sent ? _submitted(context) : (_done != null ? _success(context) : _formView(context)),
+          ),
         ],
       ),
+    );
+  }
+
+  Widget _submitted(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        MessageView(title: _name.text.trim(), body: _doneMessage, icon: Icons.hourglass_top),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: FilledButton(
+            onPressed: () => Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const SubmissionsScreen())),
+            child: Text(tr(context, 'sub.title')),
+          ),
+        ),
+      ],
     );
   }
 
@@ -223,7 +252,12 @@ class _UploadScreenState extends State<UploadScreen> {
             subtitle: Text(tr(context, 'upload.clean.hint'), style: const TextStyle(color: RS.muted)),
           ),
           const SizedBox(height: 14),
-          SignButton(label: tr(context, 'upload.button'), busy: _busy, busyLabel: tr(context, 'upload.busy'), onPressed: _submit),
+          SignButton(
+            label: tr(context, _isRecording ? 'rec.submit.button' : 'upload.button'),
+            busy: _busy,
+            busyLabel: tr(context, 'upload.busy'),
+            onPressed: _submit,
+          ),
         ],
       ),
     );
@@ -275,7 +309,7 @@ class _BatchUploadScreenState extends State<BatchUploadScreen> {
       setState(() => _status[i] = (_Item.uploading, null));
       try {
         final (route, _) = await api.upload(name: _title(f.name), path: f.path!, cleanTrack: _clean);
-        if (mounted) setState(() => _status[i] = (_Item.done, route.name));
+        if (mounted) setState(() => _status[i] = (_Item.done, route?.name ?? _title(f.name)));
       } catch (e) {
         if (mounted) setState(() => _status[i] = (_Item.failed, errorText(context, e)));
       }

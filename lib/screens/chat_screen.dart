@@ -23,8 +23,31 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
+/// Set to open a pane from outside (a group notification opens 2).
+final chatPane = ValueNotifier<int?>(null);
+
 class _ChatScreenState extends State<ChatScreen> {
   int _pane = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    chatPane.addListener(_onPane);
+    _onPane();
+  }
+
+  @override
+  void dispose() {
+    chatPane.removeListener(_onPane);
+    super.dispose();
+  }
+
+  void _onPane() {
+    final p = chatPane.value;
+    if (p == null) return;
+    chatPane.value = null;
+    if (mounted) setState(() => _pane = p);
+  }
 
   @override
   Widget build(BuildContext context) {

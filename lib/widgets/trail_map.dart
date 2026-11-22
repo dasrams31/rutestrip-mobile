@@ -1,28 +1,47 @@
+import 'dart:async';
+
+import 'package:flutter_compass/flutter_compass.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart' hide Path;
 import 'package:material_ui/material_ui.dart';
 
 import '../api.dart';
 import '../i18n.dart';
+import '../location_hub.dart';
 import '../theme.dart';
 import 'common.dart';
 
 /// OpenStreetMap tiles with the GPX track, basecamp (circle) and summit (triangle).
 /// Attribution follows the OSM tile usage policy.
 class TrailMap extends StatelessWidget {
-  const TrailMap({super.key, required this.route, this.interactive = false});
+  const TrailMap({super.key, required this.route, this.interactive = false, this.controller, this.rotate = false, this.extra = const []});
 
   final RouteDetail route;
   final bool interactive;
+  final MapController? controller;
+
+  /// Two-finger turning (the full-screen map); the small one on the detail page stays north-up.
+  final bool rotate;
+
+  /// Layers on top of the trail (the full-screen map's position dot).
+  final List<Widget> extra;
 
   @override
   Widget build(BuildContext context) {
     final points = route.coordinates.map((p) => LatLng(p[0], p[1])).toList();
     final b = route.basecampPoint, s = route.summitPoint;
     return FlutterMap(
+      mapController: controller,
       options: MapOptions(
         initialCameraFit: CameraFit.coordinates(coordinates: points, padding: const EdgeInsets.fromLTRB(32, 32, 32, 56)),
-        interactionOptions: InteractionOptions(flags: interactive ? InteractiveFlag.all & ~InteractiveFlag.rotate : InteractiveFlag.none),
+        interactionOptions: InteractionOptions(
+          flags: !interactive
+              ? InteractiveFlag.none
+              : rotate
+              ? InteractiveFlag.all
+              : InteractiveFlag.all & ~InteractiveFlag.rotate,
+        ),
       ),
       children: [
         TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', userAgentPackageName: 'id.ai.rutestrip.app', maxZoom: 19),
@@ -62,6 +81,7 @@ class TrailMap extends StatelessWidget {
               ),
           ],
         ),
+        ...extra,
         // Always visible, as the OSM tile usage policy asks; tap opens the copyright page.
         const OsmAttribution(),
       ],
@@ -94,27 +114,215 @@ class _SummitPainter extends CustomPainter {
   bool shouldRepaint(_SummitPainter old) => false;
 }
 
-class MapScreen extends StatelessWidget {
+/// Full-screen trail map: your position, and the map can turn with the phone.
+class MapScreen extends StatefulWidget {
   const MapScreen({super.key, required this.route});
 
   final RouteDetail route;
 
   @override
+  State<MapScreen> createState() => _MapScreenState();
+}
+
+class _MapScreenState extends State<MapScreen> {
+  final _map = MapController();
+  final _hubKey = Object();
+  StreamSubscription<Position>? _gps;
+  StreamSubscription<CompassEvent>? _compass;
+  LatLng? _me;
+  double? _heading;
+  double _rotation = 0;
+  bool _turn = false;
+  DateTime _turnedAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  @override
+  void initState() {
+    super.initState();
+    _startGps();
+  }
+
+  @override
+  void dispose() {
+    _gps?.cancel();
+    _compass?.cancel();
+    LocationHub.instance.release(_hubKey);
+    super.dispose();
+  }
+
+  /// Only when location is already allowed: opening a map never pops a permission prompt.
+  Future<void> _startGps() async {
+    final p = await Geolocator.checkPermission();
+    if (!(p == LocationPermission.always || p == LocationPermission.whileInUse)) return;
+    if (!mounted) return;
+    _gps = LocationHub.instance.positions.listen((pos) {
+      if (mounted) setState(() => _me = LatLng(pos.latitude, pos.longitude));
+    }, onError: (_) {});
+    LocationHub.instance.require(_hubKey, LocNeed.preview);
+    Geolocator.getLastKnownPosition()
+        .then((pos) {
+          if (pos != null && mounted && _me == null) setState(() => _me = LatLng(pos.latitude, pos.longitude));
+        })
+        .catchError((_) => null);
+  }
+
+  void _toggleTurn() {
+    if (_turn) {
+      _compass?.cancel();
+      _compass = null;
+      setState(() => _turn = false);
+      _map.rotate(0);
+      return;
+    }
+    final events = FlutterCompass.events;
+    if (events == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context, 'record.no_compass'))));
+      return;
+    }
+    setState(() => _turn = true);
+    _compass = events.listen((e) {
+      final h = e.heading;
+      if (h == null || !mounted) return;
+      final now = DateTime.now();
+      // About 10 turns a second at most, and only for a visible change.
+      if (_heading != null && (((h - _heading! + 540) % 360) - 180).abs() < 2) return;
+      if (now.difference(_turnedAt).inMilliseconds < 100) return;
+      _turnedAt = now;
+      _heading = (h + 360) % 360;
+      _map.rotate(-_heading!);
+    }, onError: (_) {});
+  }
+
+  void _north() {
+    if (_turn) _toggleTurn();
+    _map.rotate(0);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final me = _me;
     return Scaffold(
       appBar: AppBar(
         backgroundColor: RS.z9,
         foregroundColor: Colors.white,
         title: Text(
-          route.name,
+          widget.route.name,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: RS.head(24, color: Colors.white),
         ),
       ),
-      body: TrailMap(route: route, interactive: true),
+      body: Stack(
+        children: [
+          TrailMap(
+            route: widget.route,
+            interactive: true,
+            rotate: true,
+            controller: _map,
+            extra: [
+              if (me != null)
+                MarkerLayer(
+                  markers: [
+                    Marker(
+                      point: me,
+                      width: 24,
+                      height: 24,
+                      child: Semantics(
+                        label: tr(context, 'record.you'),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1D4ED8),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 3),
+                            boxShadow: const [BoxShadow(color: Color(0x55000000), blurRadius: 4)],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              // Keeps the north arrow in step with two-finger turns too.
+              _RotationWatch(
+                onRotation: (r) {
+                  if (!_turn && (r - _rotation).abs() > 1) setState(() => _rotation = r); // while turning, the compass button is enough
+                },
+              ),
+            ],
+          ),
+          Positioned(
+            right: 12,
+            top: 12,
+            child: Column(
+              children: [
+                _MapButton(
+                  tooltip: tr(context, _turn ? 'map.north' : 'map.turn'),
+                  selected: _turn,
+                  onPressed: _toggleTurn,
+                  child: Icon(_turn ? Icons.explore : Icons.explore_outlined, color: _turn ? Colors.white : RS.z9),
+                ),
+                if (_rotation.abs() > 1 && !_turn) ...[
+                  const SizedBox(height: 8),
+                  _MapButton(
+                    tooltip: tr(context, 'map.north'),
+                    onPressed: _north,
+                    child: Transform.rotate(
+                      angle: _rotation * 3.141592653589793 / 180,
+                      child: Text(tr(context, 'map.n'), style: RS.head(20, color: RS.err)),
+                    ),
+                  ),
+                ],
+                if (me != null) ...[
+                  const SizedBox(height: 8),
+                  _MapButton(
+                    tooltip: tr(context, 'record.center'),
+                    onPressed: () => _map.move(me, _map.camera.zoom < 15 ? 15 : _map.camera.zoom),
+                    child: const Icon(Icons.my_location, color: RS.z9),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
+}
+
+/// Reports the map's rotation from inside the map (no rebuild of the tiles).
+class _RotationWatch extends StatelessWidget {
+  const _RotationWatch({required this.onRotation});
+
+  final void Function(double) onRotation;
+
+  @override
+  Widget build(BuildContext context) {
+    final r = MapCamera.of(context).rotation;
+    WidgetsBinding.instance.addPostFrameCallback((_) => onRotation(r));
+    return const SizedBox.shrink();
+  }
+}
+
+class _MapButton extends StatelessWidget {
+  const _MapButton({required this.tooltip, required this.onPressed, required this.child, this.selected = false});
+
+  final String tooltip;
+  final VoidCallback onPressed;
+  final Widget child;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: tooltip,
+    child: Material(
+      color: selected ? RS.z7 : Colors.white,
+      elevation: 2,
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onPressed,
+        child: SizedBox(width: 48, height: 48, child: Center(child: child)),
+      ),
+    ),
+  );
 }
 
 const _tiles = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';

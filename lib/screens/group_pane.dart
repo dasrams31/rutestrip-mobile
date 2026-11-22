@@ -1,13 +1,19 @@
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:latlong2/latlong.dart' show LatLng;
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../app_state.dart';
 import '../i18n.dart';
 import '../mesh/mesh_protocol.dart';
 import '../mesh/mesh_service.dart';
+import '../notify.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import 'qr_scan_screen.dart';
+import 'record_screen.dart' show mapFocus;
+import 'shell.dart';
 
 /// "Rombongan": chat and positions between the phones of one hiking group, with no
 /// internet (Bluetooth and Wi-Fi between phones, messages hop through teammates).
@@ -75,7 +81,21 @@ class _GroupPaneState extends State<GroupPane> {
                   textCapitalization: TextCapitalization.characters,
                   decoration: InputDecoration(labelText: tr(context, 'grp.code'), hintText: 'ABCDE-23456', errorText: error),
                 ),
-                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () async {
+                      final invite = await Navigator.push<GroupInvite>(context, MaterialPageRoute(builder: (_) => const QrScanScreen()));
+                      if (invite == null) return;
+                      code.text = MeshProtocol.prettyCode(invite.code);
+                      if (invite.name.isNotEmpty) name.text = invite.name;
+                      setLocal(() => error = null);
+                    },
+                    icon: const Icon(Icons.qr_code_scanner),
+                    label: Text(tr(context, 'grp.qr.scan')),
+                  ),
+                ),
+                const SizedBox(height: 4),
                 TextField(
                   controller: name,
                   maxLength: 40,
@@ -119,6 +139,121 @@ class _GroupPaneState extends State<GroupPane> {
       ),
     );
     if (ok == true) await mesh.leave();
+  }
+
+  Future<void> _showQr(MeshGroup g) async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(g.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 240,
+              height: 240,
+              child: QrImageView(data: GroupInvite(g.code, g.name).encode(), backgroundColor: Colors.white, padding: const EdgeInsets.all(12)),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              MeshProtocol.prettyCode(g.code),
+              style: const TextStyle(fontWeight: FontWeight.w800, letterSpacing: 1.5, fontSize: 18, color: RS.z9),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              tr(context, 'grp.qr.lead'),
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: RS.muted, height: 1.4),
+            ),
+          ],
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(context), child: Text(tr(context, 'grp.close')))],
+      ),
+    );
+  }
+
+  Future<void> _editPin() async {
+    final text = TextEditingController(text: '${mesh.pinned?.body['text'] ?? ''}');
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(tr(context, 'grp.pin.set')),
+        content: TextField(
+          controller: text,
+          maxLength: 200,
+          minLines: 1,
+          maxLines: 4,
+          textCapitalization: TextCapitalization.sentences,
+          decoration: InputDecoration(hintText: tr(context, 'grp.pin.hint')),
+        ),
+        actions: [
+          if (mesh.pinned != null) TextButton(onPressed: () => Navigator.pop(context, ''), child: Text(tr(context, 'grp.pin.clear'))),
+          TextButton(onPressed: () => Navigator.pop(context), child: Text(tr(context, 'chat.cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(context, text.text), child: Text(tr(context, 'grp.pin.save'))),
+        ],
+      ),
+    );
+    if (result != null) await mesh.setPinned(result);
+  }
+
+  Future<void> _actions() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.my_location, color: RS.z7),
+                title: Text(tr(context, 'grp.loc.send')),
+                onTap: () => Navigator.pop(context, 'loc'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.push_pin_outlined, color: RS.z7),
+                title: Text(tr(context, 'grp.pin.set')),
+                onTap: () => Navigator.pop(context, 'pin'),
+              ),
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                child: Text(tr(context, 'grp.ping'), style: RS.head(20, color: RS.z9)),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Text(tr(context, 'grp.ping.lead'), style: const TextStyle(color: RS.muted, fontSize: 13)),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final k in ['grp.ping.gather', 'grp.ping.wait', 'grp.ping.rest', 'grp.ping.go'])
+                      ActionChip(
+                        avatar: const Icon(Icons.campaign_outlined, size: 18, color: RS.z7),
+                        label: Text(tr(context, k)),
+                        onPressed: () => Navigator.pop(context, 'ping:${tr(context, k)}'),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    if (choice == 'loc') {
+      final ok = await mesh.shareLocation();
+      if (!ok && mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context, 'grp.loc.none'))));
+    } else if (choice == 'pin') {
+      await _editPin();
+    } else if (choice.startsWith('ping:')) {
+      await mesh.sendPing(choice.substring(5));
+    }
   }
 
   Future<void> _send() async {
@@ -235,10 +370,14 @@ class _GroupPaneState extends State<GroupPane> {
                       tooltip: tr(context, 'grp.more'),
                       onSelected: (v) {
                         if (v == 'share') _shareCode(g);
+                        if (v == 'qr') _showQr(g);
+                        if (v == 'pin') _editPin();
                         if (v == 'leave') _leave();
                       },
                       itemBuilder: (context) => [
+                        PopupMenuItem(value: 'qr', child: Text(tr(context, 'grp.qr'))),
                         PopupMenuItem(value: 'share', child: Text(tr(context, 'grp.code.share'))),
+                        PopupMenuItem(value: 'pin', child: Text(tr(context, 'grp.pin.set'))),
                         PopupMenuItem(
                           value: 'leave',
                           child: Text(tr(context, 'grp.leave'), style: const TextStyle(color: RS.err)),
@@ -282,6 +421,46 @@ class _GroupPaneState extends State<GroupPane> {
             ),
           ),
         ),
+        if (mesh.pinned != null)
+          Material(
+            color: const Color(0xFFECFDF5),
+            child: InkWell(
+              onTap: _editPin,
+              child: Container(
+                width: double.infinity,
+                decoration: const BoxDecoration(
+                  border: Border(bottom: BorderSide(color: RS.line)),
+                ),
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.only(top: 2),
+                      child: Icon(Icons.push_pin, size: 16, color: RS.z7),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text.rich(
+                        TextSpan(
+                          children: [
+                            TextSpan(
+                              text: '${tr(context, 'grp.pin')} · ${mesh.pinned!.name}: ',
+                              style: const TextStyle(fontWeight: FontWeight.w700, color: RS.z7),
+                            ),
+                            TextSpan(text: '${mesh.pinned!.body['text'] ?? ''}'),
+                          ],
+                        ),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 14, height: 1.35, color: RS.ink),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         Expanded(
           child: msgs.isEmpty
               ? SingleChildScrollView(
@@ -305,7 +484,15 @@ class _GroupPaneState extends State<GroupPane> {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 _SosButton(active: mesh.mySos, enabled: mesh.running, onFire: () => mesh.setSos(!mesh.mySos)),
-                const SizedBox(width: 6),
+                SizedBox(
+                  width: 48,
+                  height: 52,
+                  child: IconButton(
+                    tooltip: tr(context, 'grp.actions'),
+                    onPressed: mesh.running ? _actions : null,
+                    icon: const Icon(Icons.add_circle_outline, color: RS.z7),
+                  ),
+                ),
                 Expanded(
                   child: TextField(
                     controller: _input,
@@ -363,6 +550,7 @@ class _MemberChip extends StatelessWidget {
       if (d != null) '${fmtNum(context, d)} m',
       if (!fresh) tr(context, 'grp.ago', {'m': ago.inMinutes}),
     ].join(' · ');
+    final bat = member.battery;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10),
       alignment: Alignment.center,
@@ -377,6 +565,23 @@ class _MemberChip extends StatelessWidget {
           Icon(sos ? Icons.sos : Icons.person, size: 16, color: sos ? RS.err : (fresh ? RS.z7 : RS.muted)),
           const SizedBox(width: 4),
           Text(text, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          if (bat != null) ...[
+            const SizedBox(width: 6),
+            Semantics(
+              label: tr(context, 'grp.battery', {'n': bat}),
+              excludeSemantics: true,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(bat <= 20 ? Icons.battery_alert : Icons.battery_std, size: 15, color: bat <= 20 ? RS.err : RS.muted),
+                  Text(
+                    '$bat%',
+                    style: TextStyle(fontSize: 12.5, color: bat <= 20 ? RS.err : RS.muted, fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -394,6 +599,38 @@ class _GroupBubble extends StatelessWidget {
     final t = message.time;
     final clock = '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
     final via = message.hops > 0 ? ' · ${tr(context, 'grp.via', {'n': message.hops})}' : '';
+    final text = '${message.body['text'] ?? ''}';
+    if (message.type == MeshType.ping) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Center(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFFECFDF5),
+              border: Border.all(color: RS.z7),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.campaign, size: 18, color: RS.z7),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    '${tr(context, 'grp.ping.in', {'name': message.name})}: $text · $clock',
+                    style: const TextStyle(fontWeight: FontWeight.w700, color: RS.z9, height: 1.3),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    final rawLat = message.body['lat'], rawLng = message.body['lng'];
+    final lat = rawLat is num ? rawLat.toDouble() : null, lng = rawLng is num ? rawLng.toDouble() : null;
+    final place = lat != null && lng != null && lat.abs() <= 90 && lng.abs() <= 180 ? LatLng(lat, lng) : null;
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
@@ -419,7 +656,37 @@ class _GroupBubble extends StatelessWidget {
                 message.name,
                 style: const TextStyle(color: RS.z7, fontWeight: FontWeight.w700, fontSize: 13),
               ),
-            Text('${message.body['text'] ?? ''}', style: TextStyle(color: mine ? Colors.white : RS.ink, fontSize: 15, height: 1.35)),
+            if (place != null)
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.place, size: 18, color: mine ? Colors.white : RS.z7),
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: Text(
+                      text.isNotEmpty ? text : tr(context, 'grp.loc.msg'),
+                      style: TextStyle(color: mine ? Colors.white : RS.ink, fontSize: 15, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              )
+            else
+              Text(text, style: TextStyle(color: mine ? Colors.white : RS.ink, fontSize: 15, height: 1.35)),
+            if (place != null)
+              TextButton.icon(
+                style: TextButton.styleFrom(
+                  foregroundColor: mine ? Colors.white : RS.z7,
+                  padding: EdgeInsets.zero,
+                  minimumSize: const Size(0, 40),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                onPressed: () {
+                  mapFocus.value = place;
+                  Shell.globalKey.currentState?.open(Tabs.record);
+                },
+                icon: const Icon(Icons.map_outlined, size: 18),
+                label: Text(tr(context, 'grp.sos.show')),
+              ),
             Text('$clock$via', style: TextStyle(fontSize: 11.5, color: mine ? const Color(0xFFD1FAE5) : RS.muted)),
           ],
         ),
@@ -547,6 +814,11 @@ class SosBanner extends StatelessWidget {
                         onPressed: () => onShow(member),
                         child: Text(tr(context, 'grp.sos.show')),
                       ),
+                    IconButton(
+                      tooltip: tr(context, 'grp.siren.off'),
+                      onPressed: Notify.instance.stopSiren,
+                      icon: const Icon(Icons.volume_off, color: Colors.white),
+                    ),
                     IconButton(
                       tooltip: tr(context, 'grp.sos.dismiss'),
                       onPressed: () => mesh.dismissSos(entry.key),

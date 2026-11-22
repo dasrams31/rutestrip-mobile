@@ -83,7 +83,9 @@ class MeshIdentity {
   static Future<String> nodeIdOf(List<int> publicKey) async => _hex((await Sha256().hash(publicKey)).bytes).substring(0, 16);
 }
 
-enum MeshType { hello, chat, pos, sos }
+/// hello: announce; chat: text (optionally with lat/lng); pos: position; sos: alert;
+/// ping: team call (buzz + short siren); pin: the group's pinned note.
+enum MeshType { hello, chat, pos, sos, ping, pin }
 
 /// A verified message from a member.
 class MeshMessage {
@@ -165,13 +167,18 @@ class MeshCodec {
       if (age > MeshProtocol.maxAge || age < -MeshProtocol.maxAge) return null;
       final type = MeshType.values.firstWhere((t) => t.name == m['type']);
       final name = '${m['name'] ?? ''}';
+      final body = Map<String, dynamic>.from(m['body'] as Map);
+      // A teammate's phone is trusted with the key, but its text is still capped.
+      final text = body['text'];
+      if (text is! String && text != null) body.remove('text');
+      if (text is String && text.length > MeshProtocol.maxTextLength) body['text'] = text.substring(0, MeshProtocol.maxTextLength);
       return MeshMessage(
         id: id,
         from: m['from'] as String,
         name: name.length > 60 ? name.substring(0, 60) : name,
         time: time,
         type: type,
-        body: Map<String, dynamic>.from(m['body'] as Map),
+        body: body,
         hops: (raw['hop'] as num).toInt(),
       );
     } catch (_) {

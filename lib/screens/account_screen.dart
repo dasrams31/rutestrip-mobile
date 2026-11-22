@@ -12,6 +12,7 @@ import '../widgets/gpx_actions.dart';
 import 'recording_screen.dart';
 import 'results_screen.dart';
 import 'settings_screen.dart';
+import 'submissions_screen.dart';
 import 'upload_screen.dart';
 
 /// "Saya" tab: the account, GPX upload, trails saved on the phone, GPS recordings and likes.
@@ -127,68 +128,6 @@ class _AccountScreenState extends State<AccountScreen> {
               ),
             ),
             _DashboardBlock(future: _dash),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-              child: Card(
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(10),
-                  onTap: () async {
-                    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const UploadScreen()));
-                    if (mounted) _reload();
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.upload_file, color: RS.z7, size: 28),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(tr(context, 'upload.title').toUpperCase(), style: RS.head(24, color: RS.z9)),
-                              Text(tr(context, 'me.upload.lead'), style: const TextStyle(color: RS.muted, fontSize: 14)),
-                            ],
-                          ),
-                        ),
-                        const Icon(Icons.chevron_right, color: RS.z7),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton.icon(
-                  onPressed: () async {
-                    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const BatchUploadScreen()));
-                    if (mounted) _reload();
-                  },
-                  icon: const Icon(Icons.library_add_outlined),
-                  label: Text(tr(context, 'batch.title')),
-                ),
-              ),
-            ),
-            _title(context, 'me.offline'),
-            FutureBuilder<List<SavedRoute>>(
-              future: _offline,
-              builder: (context, snap) {
-                if (snap.connectionState != ConnectionState.done) return const LoadingView();
-                final list = snap.data ?? const [];
-                if (list.isEmpty) return _empty(tr(context, 'me.offline.empty'));
-                return _box([
-                  for (final s in list)
-                    _RouteRow(
-                      route: s.detail,
-                      trailing: const Icon(Icons.offline_pin, color: RS.z7),
-                      onTap: () => _open(s.detail),
-                    ),
-                ]);
-              },
-            ),
             _title(context, 'me.recordings'),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
@@ -261,12 +200,74 @@ class _AccountScreenState extends State<AccountScreen> {
                                   await Navigator.of(context).push(MaterialPageRoute(builder: (_) => UploadScreen(recording: r)));
                                   if (mounted) _reload();
                                 },
-                                child: Text(tr(context, 'me.recording.upload')),
+                                child: Text(tr(context, r.imported ? 'me.recording.upload' : 'rec.submit')),
                               ),
                             ],
                           ),
                         ],
                       ),
+                    ),
+                ]);
+              },
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+              child: Card(
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(10),
+                  onTap: () async {
+                    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const UploadScreen()));
+                    if (mounted) _reload();
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.upload_file, color: RS.z7, size: 28),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(tr(context, 'upload.title').toUpperCase(), style: RS.head(24, color: RS.z9)),
+                              Text(tr(context, 'me.upload.lead'), style: const TextStyle(color: RS.muted, fontSize: 14)),
+                            ],
+                          ),
+                        ),
+                        const Icon(Icons.chevron_right, color: RS.z7),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () async {
+                    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const BatchUploadScreen()));
+                    if (mounted) _reload();
+                  },
+                  icon: const Icon(Icons.library_add_outlined),
+                  label: Text(tr(context, 'batch.title')),
+                ),
+              ),
+            ),
+            _title(context, 'me.offline'),
+            FutureBuilder<List<SavedRoute>>(
+              future: _offline,
+              builder: (context, snap) {
+                if (snap.connectionState != ConnectionState.done) return const LoadingView();
+                final list = snap.data ?? const [];
+                if (list.isEmpty) return _empty(tr(context, 'me.offline.empty'));
+                return _box([
+                  for (final s in list)
+                    _RouteRow(
+                      route: s.detail,
+                      trailing: const Icon(Icons.offline_pin, color: RS.z7),
+                      onTap: () => _open(s.detail),
                     ),
                 ]);
               },
@@ -288,6 +289,7 @@ class _AccountScreenState extends State<AccountScreen> {
                 return _box([for (final r in list) _RouteRow(route: r, onTap: () => _open(r))]);
               },
             ),
+            const _MenuCard(),
             const SizedBox(height: 32),
           ],
         ),
@@ -370,7 +372,7 @@ class _RouteRow extends StatelessWidget {
   }
 }
 
-/// Dashboard numbers from the server, the latest searches, and the account menu.
+/// Dashboard numbers from the server and the latest searches.
 class _DashboardBlock extends StatelessWidget {
   const _DashboardBlock({required this.future});
 
@@ -378,11 +380,6 @@ class _DashboardBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final menu = [
-      (Icons.manage_accounts_outlined, 'set.title', () => const SettingsScreen()),
-      (Icons.history, 'hist.title', () => const HistoryScreen()),
-      (Icons.info_outline, 'about.title', () => const AboutScreen()),
-    ];
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       child: Column(
@@ -446,22 +443,39 @@ class _DashboardBlock extends StatelessWidget {
               );
             },
           ),
-          const SizedBox(height: 12),
-          Card(
-            child: Column(
-              children: [
-                for (final (icon, key, page) in menu)
-                  ListTile(
-                    minTileHeight: 54,
-                    leading: Icon(icon, color: RS.z7),
-                    title: Text(tr(context, key), style: const TextStyle(fontWeight: FontWeight.w600)),
-                    trailing: const Icon(Icons.chevron_right, color: RS.z7),
-                    onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => page())),
-                  ),
-              ],
-            ),
-          ),
         ],
+      ),
+    );
+  }
+}
+
+/// Account menu, at the bottom of the Saya tab.
+class _MenuCard extends StatelessWidget {
+  const _MenuCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final menu = [
+      (Icons.manage_accounts_outlined, 'set.title', () => const SettingsScreen()),
+      (Icons.fact_check_outlined, 'sub.title', () => const SubmissionsScreen()),
+      (Icons.history, 'hist.title', () => const HistoryScreen()),
+      (Icons.info_outline, 'about.title', () => const AboutScreen()),
+    ];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 24, 16, 0),
+      child: Card(
+        child: Column(
+          children: [
+            for (final (icon, key, page) in menu)
+              ListTile(
+                minTileHeight: 54,
+                leading: Icon(icon, color: RS.z7),
+                title: Text(tr(context, key), style: const TextStyle(fontWeight: FontWeight.w600)),
+                trailing: const Icon(Icons.chevron_right, color: RS.z7),
+                onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => page())),
+              ),
+          ],
+        ),
       ),
     );
   }
