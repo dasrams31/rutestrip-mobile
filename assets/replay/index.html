@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>RuteStrip replay</title>
+<!-- MapLibre GL JS 5.24.1 (BSD-3-Clause, see maplibre-gl-LICENSE.txt), vendored from npm: no CDN. -->
+<link rel="stylesheet" href="maplibre-gl.css">
+<link rel="stylesheet" href="replay.css">
+</head>
+<body>
+<div id="map"></div>
+<div id="hud" hidden>
+  <div class="cell" id="cell-time"><span class="k" id="k-time"></span><span class="v" id="v-time">0:00</span></div>
+  <div class="cell"><span class="k" id="k-dist"></span><span class="v"><span id="v-dist">0</span><small> km</small></span></div>
+  <div class="cell"><span class="k" id="k-gain"></span><span class="v"><span id="v-gain">0</span><small> m</small></span></div>
+</div>
+<div id="callout" role="status" hidden></div>
+<script src="maplibre-gl.js"></script>
+<script src="replay.js"></script>
+</body>
+</html>

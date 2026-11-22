@@ -152,7 +152,9 @@ class _AccountScreenState extends State<AccountScreen> {
                 if (snap.connectionState != ConnectionState.done) return const LoadingView();
                 final list = snap.data ?? const [];
                 if (list.isEmpty) return _empty(tr(context, 'me.recordings.empty'));
+                final own = list.where((r) => !r.imported).toList();
                 return _box([
+                  if (own.isNotEmpty) _Totals(recordings: own),
                   for (final r in list)
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 8),
@@ -442,6 +444,53 @@ class _DashboardBlock extends StatelessWidget {
                 ],
               );
             },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Totals of the hikes recorded on this phone (imported files left out).
+class _Totals extends StatelessWidget {
+  const _Totals({required this.recordings});
+
+  final List<Recording> recordings;
+
+  @override
+  Widget build(BuildContext context) {
+    final km = recordings.fold<double>(0, (a, r) => a + r.distanceKm);
+    final gain = recordings.fold<double>(0, (a, r) => a + r.gainM);
+    final hours = recordings.fold<int>(0, (a, r) => a + r.movingSeconds) / 3600;
+    return Container(
+      margin: const EdgeInsets.only(top: 8, bottom: 8),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(color: RS.mist, borderRadius: BorderRadius.circular(10)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(tr(context, 'me.totals').toUpperCase(), style: RS.head(20, color: RS.z9)),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: StatItem(label: tr(context, 'me.totals.hikes'), value: '${recordings.length}'),
+              ),
+              Expanded(
+                child: StatItem(label: tr(context, 'record.distance'), value: '${fmtNum(context, km, 1)} km'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: StatItem(label: tr(context, 'record.gain'), value: '${fmtNum(context, gain)} m'),
+              ),
+              Expanded(
+                child: StatItem(label: tr(context, 'rec.moving'), value: fmtHours(context, hours)),
+              ),
+            ],
           ),
         ],
       ),

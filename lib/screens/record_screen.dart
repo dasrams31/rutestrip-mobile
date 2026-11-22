@@ -37,9 +37,15 @@ const waypointKinds = <String, IconData>{
   'water': Icons.water_drop_outlined,
   'camp': Icons.cabin_outlined,
   'summit': Icons.landscape_outlined,
+  'junction': Icons.call_split,
+  'cliff': Icons.terrain,
+  'signal': Icons.signal_cellular_alt,
   'danger': Icons.warning_amber_rounded,
   'other': Icons.place_outlined,
 };
+
+/// The track being recorded now (empty when not recording), for sharing it in the group chat.
+List<LatLng> Function() liveTrack = () => const [];
 
 /// GPS recording. A foreground service keeps it going with the screen off, the
 /// recording is autosaved as a draft (survives the app being closed), and the map
@@ -101,6 +107,7 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
     followRoute.addListener(_onFollow);
     mapFocus.addListener(_onFocus);
     mesh.addListener(_onMesh);
+    liveTrack = () => _status == _Status.idle ? const <LatLng>[] : List.of(_recordedLL);
     _onFocus(); // set before this tab was first opened ("Lihat di peta" from the group)
     _plannedLL = _toLL(followRoute.value);
     _restoreDraft();
@@ -119,6 +126,7 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
     followRoute.removeListener(_onFollow);
     mapFocus.removeListener(_onFocus);
     mesh.removeListener(_onMesh);
+    liveTrack = () => const [];
     _gps?.cancel();
     LocationHub.instance.release(_previewKey);
     LocationHub.instance.release(_recordKey);
@@ -503,7 +511,7 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
     );
     _saveDraft();
     final label = tr(context, 'wpt.$kind');
-    if (mesh.running) mesh.shareSpot(label, p.latitude, p.longitude); // the group sees it too
+    if (mesh.running) mesh.shareSpot(label, p.latitude, p.longitude, kind: kind); // the group sees it too
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context, 'wpt.added', {'name': label}))));
   }
 
@@ -822,6 +830,21 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
                         ],
                       ],
                     ),
+                    // Teammates' GPS accuracy, like the halo around a position.
+                    CircleLayer(
+                      circles: [
+                        for (final m in mesh.members.values)
+                          if (m.id != mesh.myId && m.hasPosition && (m.accuracy ?? 0) > 8)
+                            CircleMarker(
+                              point: LatLng(m.lat!, m.lng!),
+                              radius: m.accuracy!.clamp(8, 150),
+                              useRadiusInMeter: true,
+                              color: (mesh.sos.containsKey(m.id) ? RS.err : mesh.colorOf(m.id)).withValues(alpha: 0.12),
+                              borderColor: (mesh.sos.containsKey(m.id) ? RS.err : mesh.colorOf(m.id)).withValues(alpha: 0.35),
+                              borderStrokeWidth: 1,
+                            ),
+                      ],
+                    ),
                     // Teammates' last positions as dotted trails.
                     PolylineLayer(
                       polylines: [
@@ -830,7 +853,7 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
                             Polyline(
                               points: [for (final t in m.trail) LatLng(t[0], t[1])],
                               strokeWidth: 3,
-                              color: mesh.sos.containsKey(m.id) ? RS.err : const Color(0xFF1D4ED8),
+                              color: mesh.sos.containsKey(m.id) ? RS.err : mesh.colorOf(m.id),
                               pattern: const StrokePattern.dotted(),
                             ),
                       ],
@@ -859,14 +882,37 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
                               ),
                             ),
                           ),
+                        // Spots teammates marked in the group chat (water, cliff, danger...).
+                        for (final c in mesh.chat.reversed.where((c) => c.body['kind'] is String && c.body['lat'] is num && c.body['lng'] is num).take(40))
+                          Marker(
+                            point: LatLng((c.body['lat'] as num).toDouble(), (c.body['lng'] as num).toDouble()),
+                            width: 30,
+                            height: 30,
+                            rotate: true,
+                            child: Semantics(
+                              label: '${c.body['text'] ?? ''}, ${c.name}',
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: c.from == mesh.myId ? RS.z9 : mesh.colorOf(c.from), width: 2.5),
+                                ),
+                                child: Icon(
+                                  waypointKinds[c.body['kind']] ?? Icons.place_outlined,
+                                  size: 16,
+                                  color: c.body['kind'] == 'danger' || c.body['kind'] == 'cliff' ? RS.err : RS.z9,
+                                ),
+                              ),
+                            ),
+                          ),
                         for (final m in mesh.members.values)
                           if (m.hasPosition && m.id != mesh.myId)
                             Marker(
                               point: LatLng(m.lat!, m.lng!),
                               width: 120,
-                              height: 52,
-                              rotate: true,
-                              child: _TeamMarker(member: m, sos: mesh.sos.containsKey(m.id)),
+                              height: 64,
+                              rotate: true, // label stays upright; the arrow adds the map turn
+                              child: _TeamMarker(member: m, sos: mesh.sos.containsKey(m.id), color: mesh.colorOf(m.id), mapRotation: _mapRotation),
                             ),
                         if (here != null)
                           Marker(
@@ -1243,33 +1289,56 @@ class _Num extends StatelessWidget {
 
 /// A teammate from the offline group: initial in a circle, first name under it.
 class _TeamMarker extends StatelessWidget {
-  const _TeamMarker({required this.member, required this.sos});
+  const _TeamMarker({required this.member, required this.sos, required this.color, required this.mapRotation});
 
   final MeshMember member;
   final bool sos;
+  final Color color;
+  final double mapRotation;
 
   @override
   Widget build(BuildContext context) {
     final first = member.name.trim().split(' ').first;
     final stale = DateTime.now().difference(member.posTime ?? member.lastSeen).inMinutes >= 10;
-    final color = sos ? RS.err : (stale ? RS.muted : const Color(0xFF7C3AED));
+    final c = sos ? RS.err : (stale ? RS.muted : color);
+    final heading = member.heading;
     return Semantics(
       label: '${member.name}${sos ? ', SOS' : ''}',
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            width: 28,
-            height: 28,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: color,
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white, width: 2.5),
-            ),
-            child: Text(
-              first.isEmpty ? '?' : first[0].toUpperCase(),
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13),
+          // Same look as your own position: a dot with a white ring, and an arrow for
+          // the walking direction (turned with the map).
+          SizedBox(
+            width: 40,
+            height: 40,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                if (heading != null && !stale)
+                  Transform.rotate(
+                    angle: (heading + mapRotation) * math.pi / 180,
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: CustomPaint(size: const Size(14, 10), painter: _ArrowPainter(c)),
+                    ),
+                  ),
+                Container(
+                  width: 26,
+                  height: 26,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: c,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 3),
+                    boxShadow: const [BoxShadow(color: Color(0x40000000), blurRadius: 3)],
+                  ),
+                  child: Text(
+                    first.isEmpty ? '?' : first[0].toUpperCase(),
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12),
+                  ),
+                ),
+              ],
             ),
           ),
           Container(
@@ -1280,11 +1349,37 @@ class _TeamMarker extends StatelessWidget {
               first,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: RS.ink),
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: c),
             ),
           ),
         ],
       ),
     );
   }
+}
+
+class _ArrowPainter extends CustomPainter {
+  _ArrowPainter(this.color);
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = Path()
+      ..moveTo(size.width / 2, 0)
+      ..lineTo(size.width, size.height)
+      ..lineTo(0, size.height)
+      ..close();
+    canvas.drawPath(path, Paint()..color = color);
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5
+        ..color = Colors.white,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_ArrowPainter old) => old.color != color;
 }

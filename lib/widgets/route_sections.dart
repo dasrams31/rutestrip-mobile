@@ -124,6 +124,7 @@ class _ConditionsSectionState extends State<ConditionsSection> {
                   );
           },
         ),
+        if (c.hourlySummit.isNotEmpty || c.hourlyBasecamp.isNotEmpty) ForecastPanel(conditions: c),
         if (c.sunrise != null || c.sunset != null)
           Padding(
             padding: const EdgeInsets.only(top: 4, bottom: 8),
@@ -167,6 +168,173 @@ class _ConditionsSectionState extends State<ConditionsSection> {
           ),
         Text(tr(context, 'cond.sources'), style: const TextStyle(fontSize: 12, color: RS.muted)),
       ],
+    );
+  }
+}
+
+/// Weather icon and short text from the WMO code, in the app language.
+(IconData, String) weatherLook(BuildContext context, int? code, {bool day = true}) {
+  final c = code ?? -1;
+  if (c == 0 || c == 1) return (day ? Icons.wb_sunny_outlined : Icons.nightlight_outlined, tr(context, c == 0 ? 'wx.clear' : 'wx.mostly_clear'));
+  if (c == 2) return (day ? Icons.wb_cloudy_outlined : Icons.nights_stay_outlined, tr(context, 'wx.partly'));
+  if (c == 3) return (Icons.cloud_outlined, tr(context, 'wx.overcast'));
+  if (c == 45 || c == 48) return (Icons.foggy, tr(context, 'wx.fog'));
+  if (c >= 51 && c <= 57) return (Icons.grain, tr(context, 'wx.drizzle'));
+  if ((c >= 61 && c <= 67) || (c >= 80 && c <= 82)) return (Icons.water_drop_outlined, tr(context, c >= 65 || c == 82 ? 'wx.heavy_rain' : 'wx.rain'));
+  if (c >= 95) return (Icons.thunderstorm_outlined, tr(context, 'wx.storm'));
+  if (c >= 71 && c <= 86) return (Icons.ac_unit, tr(context, 'wx.cold'));
+  return (Icons.cloud_outlined, '-');
+}
+
+const _rainBlue = Color(0xFF1D4ED8);
+
+/// Forecast every few hours (rain chance, temperature, wind) and the daily cycle for
+/// the next days, at the basecamp or the summit.
+class ForecastPanel extends StatefulWidget {
+  const ForecastPanel({super.key, required this.conditions});
+
+  final Conditions conditions;
+
+  @override
+  State<ForecastPanel> createState() => _ForecastPanelState();
+}
+
+class _ForecastPanelState extends State<ForecastPanel> {
+  bool _summit = true;
+
+  String _day(BuildContext context, int offset) => tr(context, offset == 0 ? 'wx.today' : (offset == 1 ? 'wx.tomorrow' : 'wx.after'));
+
+  Widget _slot(BuildContext context, List<ForecastSlot> slots, int i) {
+    final s = slots[i];
+    final (icon, text) = weatherLook(context, s.code, day: s.isDay);
+    final newDay = i > 0 && s.dayOffset != slots[i - 1].dayOffset;
+    final wet = (s.rainChance ?? 0) >= 50;
+    final label =
+        '${_day(context, s.dayOffset)} ${s.hour}, $text, ${s.temperature?.round() ?? '-'}°, '
+        '${tr(context, 'wx.rain_chance', {'p': s.rainChance?.round() ?? '-'})}, ${tr(context, 'cond.wind')} ${s.wind?.round() ?? '-'} ${tr(context, 'cond.kmh')}';
+    return Semantics(
+      label: label,
+      excludeSemantics: true,
+      child: Container(
+        width: 66,
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+        decoration: BoxDecoration(
+          color: wet ? const Color(0xFFEFF6FF) : RS.paper,
+          border: Border.all(color: newDay ? RS.z7 : (wet ? const Color(0xFFBFDBFE) : RS.line)),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          children: [
+            Text(
+              i == 0 ? tr(context, 'wx.now') : (newDay ? _day(context, s.dayOffset) : s.hour),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: newDay ? RS.z7 : RS.muted),
+            ),
+            if (newDay) Text(s.hour, style: const TextStyle(fontSize: 11, color: RS.muted)),
+            const SizedBox(height: 4),
+            Icon(icon, size: 22, color: wet ? _rainBlue : RS.z9),
+            const SizedBox(height: 2),
+            Text(s.temperature == null ? '-' : '${s.temperature!.round()}°', style: RS.head(20, color: RS.z9)),
+            const Spacer(),
+            Text(
+              '${s.rainChance?.round() ?? '-'}%',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: wet ? _rainBlue : RS.muted),
+            ),
+            Text('${s.wind?.round() ?? '-'} ${tr(context, 'cond.kmh')}', style: const TextStyle(fontSize: 11, color: RS.muted)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _dayRow(BuildContext context, ForecastDay d) {
+    final (icon, text) = weatherLook(context, d.code);
+    final wet = (d.rainChance ?? 0) >= 50;
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: RS.line)),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 70,
+            child: Text(_day(context, d.dayOffset), style: const TextStyle(fontWeight: FontWeight.w700)),
+          ),
+          Icon(icon, size: 20, color: wet ? _rainBlue : RS.z9),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(text, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
+                Text(
+                  [
+                    tr(context, 'wx.rain_chance', {'p': d.rainChance?.round() ?? '-'}),
+                    '${tr(context, 'cond.wind')} ${d.wind?.round() ?? '-'} ${tr(context, 'cond.kmh')}',
+                    if (d.sunrise != null && d.sunset != null) '${d.sunrise}-${d.sunset}',
+                  ].join(' · '),
+                  style: TextStyle(fontSize: 12, color: wet ? _rainBlue : RS.muted),
+                ),
+              ],
+            ),
+          ),
+          Text(
+            '${d.low?.round() ?? '-'}° / ${d.high?.round() ?? '-'}°',
+            style: const TextStyle(fontWeight: FontWeight.w700, color: RS.z9),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.conditions;
+    final slots = _summit && c.hourlySummit.isNotEmpty ? c.hourlySummit : c.hourlyBasecamp;
+    final days = _summit && c.daysSummit.isNotEmpty ? c.daysSummit : c.daysBasecamp;
+    return Padding(
+      padding: const EdgeInsets.only(top: 6, bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              Text(tr(context, 'wx.title').toUpperCase(), style: RS.head(22, color: RS.z9)),
+              SegmentedButton<bool>(
+                showSelectedIcon: false,
+                style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                segments: [
+                  ButtonSegment(value: false, label: Text(tr(context, 'detail.basecamp'))),
+                  ButtonSegment(value: true, label: Text(tr(context, 'detail.summit'))),
+                ],
+                selected: {_summit},
+                onSelectionChanged: (v) => setState(() => _summit = v.first),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 136,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: slots.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 6),
+              itemBuilder: (context, i) => _slot(context, slots, i),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(tr(context, 'wx.legend'), style: const TextStyle(fontSize: 12, color: RS.muted)),
+          ),
+          if (days.isNotEmpty) ...[const SizedBox(height: 6), for (final d in days) _dayRow(context, d)],
+        ],
+      ),
     );
   }
 }

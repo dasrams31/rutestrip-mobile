@@ -35,6 +35,22 @@ class ContourHeader extends StatelessWidget {
   }
 }
 
+/// A full dark emerald page with the contour motif behind [child] (sign-in screen).
+class ContourBackground extends StatelessWidget {
+  const ContourBackground({super.key, required this.child, this.seed = 1});
+
+  final Widget child;
+  final int seed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: RS.z9,
+      child: CustomPaint(painter: _ContourPainter(seed), isComplex: true, willChange: false, child: child),
+    );
+  }
+}
+
 /// Stepped rings around two peaks, every fifth ring heavier like an index
 /// contour on a printed map. Deterministic per seed, drawn once, no animation.
 class _ContourPainter extends CustomPainter {

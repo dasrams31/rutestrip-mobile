@@ -32,6 +32,9 @@ class MeshMember {
   /// Phone battery in percent, as last reported with a position.
   int? battery;
 
+  /// Walking direction in degrees from north (only while moving).
+  double? heading;
+
   /// The last few positions, oldest first (drawn as a dotted trail on the map).
   final trail = <List<double>>[];
   static const trailMax = 10;
@@ -80,6 +83,29 @@ class MeshService extends ChangeNotifier {
   final _pingAt = <String, DateTime>{};
 
   static double? _num(Object? v) => v is num && v.isFinite ? v.toDouble() : null;
+
+  /// One colour per teammate, in the order they were first seen (stable while the
+  /// group runs). Red stays for SOS and blue for "you" on the map.
+  static const teamPalette = [
+    Color(0xFF7C3AED), // violet
+    Color(0xFFC2410C), // orange
+    Color(0xFF0E7490), // cyan
+    Color(0xFFBE185D), // pink
+    Color(0xFF4D7C0F), // olive
+    Color(0xFF92400E), // brown
+    Color(0xFF4338CA), // indigo
+    Color(0xFF0F766E), // teal
+    Color(0xFFA16207), // amber
+    Color(0xFF334155), // slate
+  ];
+
+  final _colorIndex = <String, int>{};
+
+  Color colorOf(String memberId) {
+    final i = _colorIndex.putIfAbsent(memberId, () => _colorIndex.length);
+    return teamPalette[i % teamPalette.length];
+  }
+
   Position? myPosition;
   DateTime _posSentAt = DateTime.fromMillisecondsSinceEpoch(0);
   Position? _posSent;
@@ -242,12 +268,40 @@ class MeshService extends ChangeNotifier {
   }
 
   /// A marked spot from Rekam (water, pos, camp...) shared with the group.
-  Future<void> shareSpot(String label, double lat, double lng) async {
+  Future<void> shareSpot(String label, double lat, double lng, {String? kind}) async {
     if (_node == null) return;
-    final m = await _node!.send(MeshType.chat, {'text': label, 'lat': lat, 'lng': lng});
+    final m = await _node!.send(MeshType.chat, {'text': label, 'lat': lat, 'lng': lng, 'kind': ?kind});
     _addChat(m);
     notifyListeners();
   }
+
+  /// Marks where this phone is now as a kind of spot (pos, water, cliff, danger...).
+  Future<bool> markHere(String kind, String label) async {
+    if (_node == null) return false;
+    final p = myPosition ?? await _currentPosition();
+    if (p == null) return false;
+    await shareSpot(label, p.latitude, p.longitude, kind: kind);
+    return true;
+  }
+
+  /// Most points a shared track keeps (a packet must stay well under 8 KB).
+  static const trackMax = 120;
+
+  /// Sends a recorded track (thinned to [trackMax] points) into the group chat.
+  Future<bool> shareTrack(String name, List<List<double>> points) async {
+    if (_node == null || points.length < 2) return false;
+    final step = (points.length / trackMax).ceil().clamp(1, 1 << 20);
+    final thin = [
+      for (var i = 0; i < points.length; i += step) [_round5(points[i][0]), _round5(points[i][1])],
+    ];
+    if (thin.last[0] != _round5(points.last[0]) || thin.last[1] != _round5(points.last[1])) thin.add([_round5(points.last[0]), _round5(points.last[1])]);
+    final m = await _node!.send(MeshType.chat, {'text': name.length > 80 ? name.substring(0, 80) : name, 'track': thin});
+    _addChat(m);
+    notifyListeners();
+    return true;
+  }
+
+  static double _round5(double v) => (v * 100000).roundToDouble() / 100000;
 
   /// Team call: buzz and a short siren on every phone ("Kumpul!", "Tunggu!").
   Future<void> sendPing(String text) async {
@@ -338,6 +392,7 @@ class MeshService extends ChangeNotifier {
       ..lng = lng
       ..accuracy = _num(m.body['acc'])
       ..battery = _num(m.body['bat'])?.round().clamp(0, 100) ?? member.battery
+      ..heading = _num(m.body['hdg'])
       ..posTime = m.time;
     member.trail.add([lat, lng]);
     if (member.trail.length > MeshMember.trailMax) member.trail.removeAt(0);
@@ -394,7 +449,8 @@ class MeshService extends ChangeNotifier {
     try {
       bat = await Battery().batteryLevel;
     } catch (_) {}
-    await _node?.send(MeshType.pos, {'lat': p.latitude, 'lng': p.longitude, 'acc': p.accuracy, 'bat': ?bat});
+    final moving = p.speed > 0.5 && p.heading >= 0;
+    await _node?.send(MeshType.pos, {'lat': p.latitude, 'lng': p.longitude, 'acc': p.accuracy, 'bat': ?bat, if (moving) 'hdg': p.heading.roundToDouble()});
   }
 
   /// Distance from this phone to a member (metres), when both positions are known.

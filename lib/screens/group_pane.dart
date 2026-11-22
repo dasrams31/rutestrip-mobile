@@ -1,5 +1,6 @@
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart' show LatLng;
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
@@ -9,10 +10,12 @@ import '../i18n.dart';
 import '../mesh/mesh_protocol.dart';
 import '../mesh/mesh_service.dart';
 import '../notify.dart';
+import '../storage.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/trail_map.dart' show OsmAttribution;
 import 'qr_scan_screen.dart';
-import 'record_screen.dart' show mapFocus;
+import 'record_screen.dart' show mapFocus, liveTrack, waypointKinds;
 import 'shell.dart';
 
 /// "Rombongan": chat and positions between the phones of one hiking group, with no
@@ -212,9 +215,39 @@ class _GroupPaneState extends State<GroupPane> {
                 onTap: () => Navigator.pop(context, 'loc'),
               ),
               ListTile(
+                leading: const Icon(Icons.timeline, color: RS.z7),
+                title: Text(tr(context, 'grp.track.send')),
+                onTap: () => Navigator.pop(context, 'track'),
+              ),
+              ListTile(
                 leading: const Icon(Icons.push_pin_outlined, color: RS.z7),
                 title: Text(tr(context, 'grp.pin.set')),
                 onTap: () => Navigator.pop(context, 'pin'),
+              ),
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                child: Text(tr(context, 'grp.mark'), style: RS.head(20, color: RS.z9)),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Text(tr(context, 'grp.mark.lead'), style: const TextStyle(color: RS.muted, fontSize: 13)),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final e in waypointKinds.entries)
+                      if (e.key != 'other')
+                        ActionChip(
+                          avatar: Icon(e.value, size: 18, color: e.key == 'danger' || e.key == 'cliff' ? RS.err : RS.z7),
+                          label: Text(tr(context, 'wpt.${e.key}')),
+                          onPressed: () => Navigator.pop(context, 'mark:${e.key}'),
+                        ),
+                  ],
+                ),
               ),
               const Divider(height: 1),
               Padding(
@@ -249,11 +282,60 @@ class _GroupPaneState extends State<GroupPane> {
     if (choice == 'loc') {
       final ok = await mesh.shareLocation();
       if (!ok && mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context, 'grp.loc.none'))));
+    } else if (choice.startsWith('mark:')) {
+      final kind = choice.substring(5);
+      final ok = await mesh.markHere(kind, tr(context, 'wpt.$kind'));
+      if (!ok && mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context, 'grp.loc.none'))));
+    } else if (choice == 'track') {
+      await _sendTrack();
     } else if (choice == 'pin') {
       await _editPin();
     } else if (choice.startsWith('ping:')) {
       await mesh.sendPing(choice.substring(5));
     }
+  }
+
+  /// The track being recorded now, or a saved recording picked from a list.
+  Future<void> _sendTrack() async {
+    final live = liveTrack();
+    if (live.length >= 2) {
+      await mesh.shareTrack(tr(context, 'grp.track.live'), [
+        for (final p in live) [p.latitude, p.longitude],
+      ]);
+      return;
+    }
+    final saved = await RecordingStore.all();
+    if (!mounted) return;
+    if (saved.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context, 'grp.track.none'))));
+      return;
+    }
+    final pick = await showModalBottomSheet<Recording>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text(tr(context, 'grp.track.pick'), style: RS.head(20, color: RS.z9)),
+            ),
+            for (final r in saved.take(20))
+              ListTile(
+                leading: const Icon(Icons.timeline, color: RS.z7),
+                title: Text(r.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                subtitle: Text('${fmtNum(context, r.distanceKm, 2)} km'),
+                onTap: () => Navigator.pop(context, r),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (pick == null) return;
+    await mesh.shareTrack(pick.name, [
+      for (final p in pick.points) [p.lat, p.lng],
+    ]);
   }
 
   Future<void> _send() async {
@@ -562,7 +644,7 @@ class _MemberChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(sos ? Icons.sos : Icons.person, size: 16, color: sos ? RS.err : (fresh ? RS.z7 : RS.muted)),
+          Icon(sos ? Icons.sos : Icons.circle, size: sos ? 16 : 12, color: sos ? RS.err : (fresh ? mesh.colorOf(member.id) : RS.muted)),
           const SizedBox(width: 4),
           Text(text, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
           if (bat != null) ...[
@@ -631,6 +713,9 @@ class _GroupBubble extends StatelessWidget {
     final rawLat = message.body['lat'], rawLng = message.body['lng'];
     final lat = rawLat is num ? rawLat.toDouble() : null, lng = rawLng is num ? rawLng.toDouble() : null;
     final place = lat != null && lng != null && lat.abs() <= 90 && lng.abs() <= 180 ? LatLng(lat, lng) : null;
+    final kind = message.body['kind'] is String ? message.body['kind'] as String : null;
+    final track = sharedTrack(message.body['track']);
+    final warn = kind == 'danger' || kind == 'cliff';
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
@@ -660,7 +745,7 @@ class _GroupBubble extends StatelessWidget {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.place, size: 18, color: mine ? Colors.white : RS.z7),
+                  Icon(waypointKinds[kind] ?? Icons.place, size: 18, color: mine ? Colors.white : (warn ? RS.err : RS.z7)),
                   const SizedBox(width: 4),
                   Flexible(
                     child: Text(
@@ -670,7 +755,50 @@ class _GroupBubble extends StatelessWidget {
                   ),
                 ],
               )
-            else
+            else if (track != null) ...[
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.timeline, size: 18, color: mine ? Colors.white : RS.z7),
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: Text(
+                      text.isNotEmpty ? text : tr(context, 'grp.track.msg'),
+                      style: TextStyle(color: mine ? Colors.white : RS.ink, fontSize: 15, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: SizedBox(
+                  width: 200,
+                  height: 90,
+                  child: TrackThumb(
+                    track: [
+                      for (final p in track) [p.latitude, p.longitude],
+                    ],
+                    height: 90,
+                  ),
+                ),
+              ),
+              TextButton.icon(
+                style: TextButton.styleFrom(
+                  foregroundColor: mine ? Colors.white : RS.z7,
+                  padding: EdgeInsets.zero,
+                  minimumSize: const Size(0, 40),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => SharedTrackScreen(title: text.isNotEmpty ? text : tr(context, 'grp.track.msg'), from: message.name, track: track),
+                  ),
+                ),
+                icon: const Icon(Icons.map_outlined, size: 18),
+                label: Text(tr(context, 'grp.sos.show')),
+              ),
+            ] else
               Text(text, style: TextStyle(color: mine ? Colors.white : RS.ink, fontSize: 15, height: 1.35)),
             if (place != null)
               TextButton.icon(
@@ -690,6 +818,94 @@ class _GroupBubble extends StatelessWidget {
             Text('$clock$via', style: TextStyle(fontSize: 11.5, color: mine ? const Color(0xFFD1FAE5) : RS.muted)),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Valid points of a track sent by a teammate (at most a few hundred), or null.
+List<LatLng>? sharedTrack(Object? raw) {
+  if (raw is! List) return null;
+  final out = <LatLng>[];
+  for (final p in raw.take(400)) {
+    if (p is List && p.length >= 2 && p[0] is num && p[1] is num) {
+      final lat = (p[0] as num).toDouble(), lng = (p[1] as num).toDouble();
+      if (lat.isFinite && lng.isFinite && lat.abs() <= 90 && lng.abs() <= 180) out.add(LatLng(lat, lng));
+    }
+  }
+  return out.length >= 2 ? out : null;
+}
+
+/// A teammate's shared track on a full map.
+class SharedTrackScreen extends StatelessWidget {
+  const SharedTrackScreen({super.key, required this.title, required this.from, required this.track});
+
+  final String title, from;
+  final List<LatLng> track;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: RS.z9,
+        foregroundColor: Colors.white,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: RS.head(22, color: Colors.white),
+            ),
+            Text(from, style: const TextStyle(fontSize: 12.5, color: RS.onDarkSoft)),
+          ],
+        ),
+      ),
+      body: FlutterMap(
+        options: MapOptions(
+          initialCameraFit: CameraFit.coordinates(coordinates: track, padding: const EdgeInsets.all(36), maxZoom: 17),
+          interactionOptions: const InteractionOptions(flags: InteractiveFlag.all & ~InteractiveFlag.rotate),
+          backgroundColor: RS.mist,
+        ),
+        children: [
+          TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', userAgentPackageName: 'id.ai.rutestrip.app', maxZoom: 19),
+          PolylineLayer(
+            polylines: [
+              Polyline(points: track, strokeWidth: 7, color: Colors.white),
+              Polyline(points: track, strokeWidth: 4, color: mesh.colorOf('track:$from')),
+            ],
+          ),
+          MarkerLayer(
+            markers: [
+              Marker(
+                point: track.first,
+                width: 20,
+                height: 20,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: RS.z9,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 3),
+                  ),
+                ),
+              ),
+              Marker(
+                point: track.last,
+                width: 22,
+                height: 22,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: RS.err,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 3),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const OsmAttribution(),
+        ],
       ),
     );
   }

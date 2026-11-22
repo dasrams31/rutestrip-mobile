@@ -413,9 +413,13 @@ class LangToggle extends StatelessWidget {
 /// Top row inside a header band: back (when possible) or the brand, an optional
 /// title, and the language switch. The account lives in the "Saya" tab.
 class HeaderBar extends StatelessWidget {
-  const HeaderBar({super.key, this.title});
+  const HeaderBar({super.key, this.title, this.brand = true});
 
   final String? title;
+
+  /// Logo and name on the left when there is no back button (off on the sign-in screen,
+  /// which shows its own large logo).
+  final bool brand;
 
   @override
   Widget build(BuildContext context) {
@@ -428,6 +432,8 @@ class HeaderBar extends StatelessWidget {
             icon: const Icon(Icons.arrow_back, color: Colors.white),
             tooltip: MaterialLocalizations.of(context).backButtonTooltip,
           )
+        else if (!brand)
+          const SizedBox(height: 48)
         else
           Padding(
             padding: const EdgeInsets.only(left: 4),

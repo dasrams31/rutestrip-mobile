@@ -1,0 +1,33 @@
+@font-face { font-family: 'Barlow Condensed'; font-weight: 800; src: url('../fonts/BarlowCondensed-800.ttf'); }
+@font-face { font-family: 'Inter'; font-weight: 600; src: url('../fonts/Inter-600.ttf'); }
+@font-face { font-family: 'Inter'; font-weight: 400; src: url('../fonts/Inter-400.ttf'); }
+
+html, body { margin: 0; padding: 0; height: 100%; background: #e7efe9; overflow: hidden; }
+body { font-family: 'Inter', sans-serif; color: #14231d; -webkit-user-select: none; user-select: none; }
+#map { position: absolute; inset: 0; }
+
+#hud {
+  position: absolute; top: 10px; left: 10px; right: 10px;
+  display: flex; gap: 6px;
+  background: rgba(5, 59, 48, 0.88); color: #fff;
+  border-radius: 10px; padding: 8px 12px;
+  pointer-events: none;
+}
+#hud[hidden] { display: none; }
+#hud .cell { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#hud .cell[hidden] { display: none; }
+#hud .k { font-size: 11px; font-weight: 600; color: #a7f3d0; letter-spacing: 0.04em; text-transform: uppercase; }
+#hud .v { font-family: 'Barlow Condensed', sans-serif; font-weight: 800; font-size: 30px; line-height: 1; font-variant-numeric: tabular-nums; }
+#hud .v small { font-size: 16px; font-weight: 800; }
+
+#callout {
+  position: absolute; top: 84px; left: 10px; max-width: calc(100% - 20px);
+  background: #f6f4ec; border-radius: 8px; padding: 8px 14px;
+  border-left: 5px solid #047857; box-shadow: 0 2px 10px rgba(5, 59, 48, 0.35);
+  pointer-events: none;
+}
+#callout[hidden] { display: none; }
+#callout .n { font-family: 'Barlow Condensed', sans-serif; font-weight: 800; font-size: 24px; line-height: 1.05; color: #053b30; text-transform: uppercase; }
+#callout .m { font-size: 14px; font-weight: 600; color: #4b5d55; margin-top: 2px; }
+
+.maplibregl-ctrl-attrib { font-size: 10px; background: rgba(246, 244, 236, 0.85) !important; }

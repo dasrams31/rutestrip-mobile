@@ -13,6 +13,7 @@ import '../widgets/elevation_chart.dart';
 import '../widgets/gpx_actions.dart';
 import '../widgets/trail_map.dart';
 import 'record_screen.dart';
+import 'replay_screen.dart';
 import 'upload_screen.dart';
 
 /// One saved GPS recording: map, numbers, elevation profile, marked points, and
@@ -241,6 +242,13 @@ class _RecordingScreenState extends State<RecordingScreen> {
                       label: Text(tr(context, 'gpx.follow')),
                     ),
                     FilledButton.icon(onPressed: _share, icon: const Icon(Icons.share), label: Text(tr(context, 'rec.share'))),
+                    if (r.points.length >= 2)
+                      OutlinedButton.icon(
+                        onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ReplayScreen(recording: r))),
+                        style: OutlinedButton.styleFrom(backgroundColor: Colors.white),
+                        icon: const Icon(Icons.landscape_outlined, color: RS.z7),
+                        label: Text(tr(context, 'replay.open')),
+                      ),
                     OutlinedButton.icon(
                       onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => UploadScreen(recording: r))),
                       style: OutlinedButton.styleFrom(backgroundColor: Colors.white),

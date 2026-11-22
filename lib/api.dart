@@ -513,6 +513,54 @@ class Weather {
   final int? elevation;
 }
 
+/// One slot of the hourly forecast (every few hours).
+class ForecastSlot {
+  ForecastSlot.fromJson(Map j)
+    : hour = '${j['hour'] ?? ''}',
+      dayOffset = _i(j['day_offset']) ?? 0,
+      temperature = _d(j['temperature_c']),
+      rainChance = _d(j['rain_probability']),
+      rain = _d(j['precipitation_mm']),
+      wind = _d(j['wind_speed_kmh']),
+      gusts = _d(j['wind_gusts_kmh']),
+      code = _i(j['weather_code']),
+      isDay = j['is_day'] != false;
+
+  final String hour;
+  final int dayOffset;
+  final double? temperature, rainChance, rain, wind, gusts;
+  final int? code;
+  final bool isDay;
+}
+
+/// One forecast day: the daily cycle of temperature, rain and wind.
+class ForecastDay {
+  ForecastDay.fromJson(Map j)
+    : dayOffset = _i(j['day_offset']) ?? 0,
+      date = '${j['date'] ?? ''}',
+      high = _d(j['temperature_max_c']),
+      low = _d(j['temperature_min_c']),
+      rainChance = _d(j['rain_probability']),
+      rain = _d(j['precipitation_mm']),
+      wind = _d(j['wind_speed_kmh']),
+      code = _i(j['weather_code']),
+      sunrise = j['sunrise'] as String?,
+      sunset = j['sunset'] as String?;
+
+  final int dayOffset;
+  final String date;
+  final double? high, low, rainChance, rain, wind;
+  final int? code;
+  final String? sunrise, sunset;
+}
+
+List<T> _list<T>(Object? v, T Function(Map) f) => v is List
+    ? [
+        for (final e in v)
+          if (e is Map) f(e),
+      ]
+    : <T>[];
+
 class Conditions {
   Conditions.fromJson(Map j)
     : location = (j['location'] as Map?)?['label'] as String?,
@@ -523,12 +571,18 @@ class Conditions {
       updated = (j['weather'] as Map?)?['updated_label'] as String?,
       sunrise = (j['weather'] as Map?)?['sunrise'] as String?,
       sunset = (j['weather'] as Map?)?['sunset'] as String?,
+      hourlyBasecamp = _list(((j['weather'] as Map?)?['forecast'] as Map?)?['basecamp'], ForecastSlot.fromJson),
+      hourlySummit = _list(((j['weather'] as Map?)?['forecast'] as Map?)?['summit'], ForecastSlot.fromJson),
+      daysBasecamp = _list(((j['weather'] as Map?)?['days'] as Map?)?['basecamp'], ForecastDay.fromJson),
+      daysSummit = _list(((j['weather'] as Map?)?['days'] as Map?)?['summit'], ForecastDay.fromJson),
       caution = (j['safety'] as Map?)?['level'] == 'caution',
       safety = ((j['safety'] as Map?)?['messages'] as List? ?? const []).map((e) => '$e').toList();
 
   final String? location, directionsUrl, updated, sunrise, sunset;
   final TrailPoint? basecamp;
   final Weather? basecampWeather, summitWeather;
+  final List<ForecastSlot> hourlyBasecamp, hourlySummit;
+  final List<ForecastDay> daysBasecamp, daysSummit;
   final bool caution;
   final List<String> safety;
 }
