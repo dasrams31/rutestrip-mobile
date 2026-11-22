@@ -5,7 +5,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:rutestrip/api.dart';
 import 'package:rutestrip/app_state.dart';
+import 'package:rutestrip/mesh/mesh_protocol.dart';
+import 'package:rutestrip/mesh/mesh_service.dart';
 import 'package:rutestrip/screens/chat_screen.dart';
+import 'package:rutestrip/screens/group_pane.dart';
 import 'package:rutestrip/screens/onboarding_screen.dart';
 import 'package:rutestrip/screens/settings_screen.dart';
 import 'package:rutestrip/screens/shell.dart';
@@ -79,6 +82,30 @@ void main() {
       await tester.pump();
       expect(find.byType(TextField), findsOneWidget); // the hidden community pane is offstage
       expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('group pane intro ($lang)', (tester) async {
+      mesh.loaded = true;
+      await pump(tester, const Scaffold(body: GroupPane()), lang);
+      expect(find.byType(OutlinedButton), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a teammate SOS shows the red banner with a way to the map ($lang)', (tester) async {
+      final m = MeshMember('n1', 'Budi')
+        ..lat = -7.45
+        ..lng = 110.43;
+      mesh.members['n1'] = m;
+      mesh.sos['n1'] = MeshMessage(id: 's1', from: 'n1', name: 'Budi', time: DateTime.now(), type: MeshType.sos, body: {'active': true, 'lat': -7.45, 'lng': 110.43});
+      MeshMember? shown;
+      await pump(tester, Scaffold(body: SosBanner(onShow: (x) => shown = x)), lang);
+      expect(find.textContaining('Budi'), findsOneWidget);
+      await tester.tap(find.text(lang == 'en' ? 'Show on map' : 'Lihat di peta'));
+      expect(shown?.id, 'n1');
+      mesh.dismissSos('n1');
+      await tester.pump();
+      expect(find.textContaining('Budi'), findsNothing);
+      mesh.members.clear();
     });
 
     testWidgets('upload form ($lang)', (tester) async {

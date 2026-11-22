@@ -1,7 +1,10 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../i18n.dart';
+import '../app_state.dart';
+import '../mesh/mesh_service.dart';
 import '../storage.dart';
+import 'group_pane.dart';
 import '../theme.dart';
 import 'account_screen.dart';
 import 'chat_screen.dart';
@@ -33,6 +36,11 @@ class ShellState extends State<Shell> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      mesh.load(AppScope.read(context).user?.name ?? 'Pendaki');
+      syncMeshName(context);
+    });
     // A recording that was cut off (app closed, phone restarted) opens Rekam so it can be resumed.
     RecordingStore.loadDraft().then((d) {
       if (d != null && mounted) open(Tabs.record);

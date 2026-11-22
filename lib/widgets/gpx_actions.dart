@@ -8,6 +8,7 @@ import 'package:share_plus/share_plus.dart';
 import '../api.dart';
 import '../gpx_import.dart';
 import '../i18n.dart';
+import '../mesh/mesh_service.dart';
 import '../screens/record_screen.dart';
 import '../screens/shell.dart';
 import '../storage.dart';
@@ -113,6 +114,23 @@ Future<void> showEmergency(BuildContext context, {double? lat, double? lng, doub
                 ],
               ),
             const SizedBox(height: 8),
+            if (mesh.running)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: RS.err,
+                    side: const BorderSide(color: RS.err, width: 2),
+                    minimumSize: const Size(48, 52),
+                  ),
+                  onPressed: () async {
+                    await mesh.setSos(!mesh.mySos);
+                    if (context.mounted) Navigator.of(context).pop();
+                  },
+                  icon: const Icon(Icons.groups),
+                  label: Text(tr(context, mesh.mySos ? 'grp.sos.stop' : 'grp.sos.send')),
+                ),
+              ),
             FilledButton.icon(
               style: FilledButton.styleFrom(backgroundColor: RS.err, minimumSize: const Size(48, 52)),
               onPressed: () => openExternal('tel:112'),

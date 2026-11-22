@@ -20,9 +20,13 @@ import '../widgets/common.dart';
 import '../widgets/contour_header.dart';
 import '../widgets/gpx_actions.dart';
 import '../widgets/trail_map.dart';
+import '../mesh/mesh_service.dart';
 
 /// Route to follow while recording, set by "Rekam di jalur ini" on a route page.
 final followRoute = ValueNotifier<RouteDetail?>(null);
+
+/// A point to show on the Rekam map (for example a teammate's SOS).
+final mapFocus = ValueNotifier<LatLng?>(null);
 
 enum _Status { idle, recording, paused }
 
@@ -92,6 +96,8 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     followRoute.addListener(_onFollow);
+    mapFocus.addListener(_onFocus);
+    mesh.addListener(_onMesh);
     _plannedLL = _toLL(followRoute.value);
     _restoreDraft();
     _syncSensors();
@@ -107,6 +113,8 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     followRoute.removeListener(_onFollow);
+    mapFocus.removeListener(_onFocus);
+    mesh.removeListener(_onMesh);
     _sub?.cancel();
     _preview?.cancel();
     _compass?.cancel();
@@ -196,6 +204,23 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
       _offRoute = false;
     });
     if (followRoute.value != null) WidgetsBinding.instance.addPostFrameCallback((_) => _fitAll());
+  }
+
+  void _onMesh() {
+    if (mounted && widget.active) setState(() {});
+  }
+
+  void _onFocus() {
+    final p = mapFocus.value;
+    if (p == null) return;
+    mapFocus.value = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() => _follow = false);
+      try {
+        _map.move(p, 17);
+      } catch (_) {}
+    });
   }
 
   /// First fix: zoom to the hiker. Afterwards keep them centred while following.
@@ -765,6 +790,15 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
                               ),
                             ),
                           ),
+                        for (final m in mesh.members.values)
+                          if (m.hasPosition && m.id != mesh.myId)
+                            Marker(
+                              point: LatLng(m.lat!, m.lng!),
+                              width: 120,
+                              height: 52,
+                              rotate: true,
+                              child: _TeamMarker(member: m, sos: mesh.sos.containsKey(m.id)),
+                            ),
                         if (here != null)
                           Marker(
                             point: here,
@@ -962,6 +996,12 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
               ),
               const SizedBox(height: 4),
               Text(status, style: const TextStyle(fontSize: 12.5, color: RS.muted, height: 1.35)),
+              for (final m in mesh.members.values)
+                if (m.id != mesh.myId && (mesh.distanceTo(m) ?? 0) > MeshService.separatedM)
+                  Text(
+                    tr(context, 'grp.far', {'name': m.name, 'm': fmtNum(context, mesh.distanceTo(m))}),
+                    style: const TextStyle(fontSize: 13, color: RS.warnInk, fontWeight: FontWeight.w700),
+                  ),
               if (_heading != null)
                 Text(tr(context, 'record.facing', {'dir': _dir(_heading!), 'deg': _heading!.round()}), style: const TextStyle(fontSize: 12.5, color: RS.muted)),
               const SizedBox(height: 8),
@@ -1120,6 +1160,54 @@ class _Num extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// A teammate from the offline group: initial in a circle, first name under it.
+class _TeamMarker extends StatelessWidget {
+  const _TeamMarker({required this.member, required this.sos});
+
+  final MeshMember member;
+  final bool sos;
+
+  @override
+  Widget build(BuildContext context) {
+    final first = member.name.trim().split(' ').first;
+    final stale = DateTime.now().difference(member.posTime ?? member.lastSeen).inMinutes >= 10;
+    final color = sos ? RS.err : (stale ? RS.muted : const Color(0xFF7C3AED));
+    return Semantics(
+      label: '${member.name}${sos ? ', SOS' : ''}',
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 28,
+            height: 28,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: color,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 2.5),
+            ),
+            child: Text(
+              first.isEmpty ? '?' : first[0].toUpperCase(),
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13),
+            ),
+          ),
+          Container(
+            margin: const EdgeInsets.only(top: 2),
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+            decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.9), borderRadius: BorderRadius.circular(3)),
+            child: Text(
+              first,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: RS.ink),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

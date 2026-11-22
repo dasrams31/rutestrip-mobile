@@ -1,10 +1,14 @@
 import 'package:flutter/services.dart';
+import 'package:latlong2/latlong.dart' show LatLng;
 import 'package:material_ui/material_ui.dart';
 
 import 'api.dart';
 import 'app_state.dart';
 import 'screens/login_screen.dart';
 import 'screens/onboarding_screen.dart';
+import 'mesh/mesh_service.dart';
+import 'screens/group_pane.dart';
+import 'screens/record_screen.dart';
 import 'screens/shell.dart';
 import 'theme.dart';
 
@@ -14,7 +18,11 @@ final rootNavigator = GlobalKey<NavigatorState>();
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   Api.checkBaseUrl();
-  final state = AppState(Api())..onSignedOut = () => rootNavigator.currentState?.popUntil((r) => r.isFirst);
+  final state = AppState(Api())
+    ..onSignedOut = () {
+      rootNavigator.currentState?.popUntil((r) => r.isFirst);
+      mesh.leave(); // the next account on this phone must not read this group's chat
+    };
   runApp(RuteStripApp(state: state));
   await state.load();
 }
@@ -44,7 +52,7 @@ class RuteStripApp extends StatelessWidget {
             // A fixed dark strip under the status bar: scrolled content never sits behind the light icons.
             child: Stack(
               children: [
-                child!,
+                state.signedIn ? _WithSosBanner(child: child!) : child!,
                 Positioned(
                   top: 0,
                   left: 0,
@@ -79,6 +87,37 @@ class _Splash extends StatelessWidget {
       body: Center(
         child: Text('RuteStrip', style: RS.head(48, color: Colors.white)),
       ),
+    );
+  }
+}
+
+/// A teammate's SOS sits above every screen; the screen below loses its top inset meanwhile.
+class _WithSosBanner extends StatelessWidget {
+  const _WithSosBanner({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: mesh,
+      builder: (context, _) {
+        if (mesh.sos.isEmpty) return child;
+        return Column(
+          children: [
+            SosBanner(
+              onShow: (m) {
+                rootNavigator.currentState?.popUntil((r) => r.isFirst);
+                mapFocus.value = LatLng(m.lat!, m.lng!);
+                Shell.globalKey.currentState?.open(Tabs.record);
+              },
+            ),
+            Expanded(
+              child: MediaQuery.removePadding(context: context, removeTop: true, child: child),
+            ),
+          ],
+        );
+      },
     );
   }
 }

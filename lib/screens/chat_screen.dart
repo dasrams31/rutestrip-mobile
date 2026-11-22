@@ -10,6 +10,7 @@ import '../i18n.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/contour_header.dart';
+import 'group_pane.dart';
 
 /// Chat tab: "Obrolan Pendaki" (people) and "Asisten" (AI), switched in the header.
 class ChatScreen extends StatefulWidget {
@@ -38,16 +39,21 @@ class _ChatScreenState extends State<ChatScreen> {
               children: [
                 const HeaderBar(),
                 const SizedBox(height: 6),
-                Row(
-                  children: [
-                    _PaneButton(label: tr(context, 'chat.community'), selected: _pane == 0, onTap: () => setState(() => _pane = 0)),
-                    const SizedBox(width: 8),
-                    _PaneButton(label: tr(context, 'chat.assistant'), selected: _pane == 1, onTap: () => setState(() => _pane = 1)),
-                  ],
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      _PaneButton(label: tr(context, 'chat.community'), selected: _pane == 0, onTap: () => setState(() => _pane = 0)),
+                      const SizedBox(width: 8),
+                      _PaneButton(label: tr(context, 'chat.assistant'), selected: _pane == 1, onTap: () => setState(() => _pane = 1)),
+                      const SizedBox(width: 8),
+                      _PaneButton(label: tr(context, 'grp.title'), selected: _pane == 2, onTap: () => setState(() => _pane = 2)),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  tr(context, _pane == 0 ? 'chat.community.lead' : 'chat.assistant.lead'),
+                  tr(context, const ['chat.community.lead', 'chat.assistant.lead', 'grp.short'][_pane]),
                   style: const TextStyle(color: Color(0xFFD1FAE5), fontSize: 14, height: 1.35),
                 ),
               ],
@@ -59,6 +65,7 @@ class _ChatScreenState extends State<ChatScreen> {
               children: [
                 _CommunityChat(active: widget.active && _pane == 0),
                 const _AssistantChat(),
+                const GroupPane(),
               ],
             ),
           ),
