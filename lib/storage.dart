@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'api.dart';
@@ -108,6 +109,8 @@ class Recording {
     required this.gainM,
     required this.movingSeconds,
     this.waypoints = const [],
+    this.imported = false,
+    this.segmentStarts = const [0],
   });
 
   Recording.fromJson(Map j)
@@ -118,7 +121,9 @@ class Recording {
       distanceKm = (j['distance_km'] as num).toDouble(),
       gainM = (j['gain_m'] as num).toDouble(),
       movingSeconds = (j['seconds'] as num).toInt(),
-      waypoints = (j['waypoints'] as List? ?? const []).map((w) => Waypoint.fromJson(w as Map)).toList();
+      waypoints = (j['waypoints'] as List? ?? const []).map((w) => Waypoint.fromJson(w as Map)).toList(),
+      imported = j['imported'] == true,
+      segmentStarts = (j['segments'] as List? ?? const [0]).map((e) => (e as num).toInt()).toList();
 
   final String id;
   String name;
@@ -127,6 +132,12 @@ class Recording {
   final double distanceKm, gainM;
   final int movingSeconds;
   final List<Waypoint> waypoints;
+
+  /// Opened from a GPX file on the phone, not recorded here (no moving time).
+  final bool imported;
+
+  /// Index of the first point of each part (a new part starts after a pause or a restored draft).
+  final List<int> segmentStarts;
 
   /// Average speed while moving, km/h.
   double get speedKmh => movingSeconds <= 0 ? 0 : distanceKm / (movingSeconds / 3600);
@@ -140,6 +151,8 @@ class Recording {
     'seconds': movingSeconds,
     'points': points.map((p) => p.toJson()).toList(),
     'waypoints': waypoints.map((w) => w.toJson()).toList(),
+    'imported': imported,
+    'segments': segmentStarts,
   };
 
   String toGpx() {
@@ -154,7 +167,9 @@ class Recording {
       b.writeln('<time>${w.time.toUtc().toIso8601String()}</time><name>${esc(waypointNames[w.kind] ?? w.kind)}</name><type>${esc(w.kind)}</type></wpt>');
     }
     b.writeln('  <trk><name>${esc(name)}</name><trkseg>');
-    for (final p in points) {
+    final breaks = segmentStarts.where((i) => i > 0 && i < points.length).toSet();
+    for (final (i, p) in points.indexed) {
+      if (breaks.contains(i)) b.writeln('  </trkseg><trkseg>');
       b.write('    <trkpt lat="${p.lat.toStringAsFixed(7)}" lon="${p.lng.toStringAsFixed(7)}">');
       if (p.ele != null) b.write('<ele>${p.ele!.toStringAsFixed(1)}</ele>');
       b.writeln('<time>${p.time.toUtc().toIso8601String()}</time></trkpt>');
@@ -172,13 +187,25 @@ const waypointNames = {'pos': 'Pos', 'water': 'Sumber air', 'camp': 'Tempat camp
 class RecordingStore {
   static Future<File> _draftFile() async => File('${(await _dir()).path}/_draft.json');
 
+  /// Draft writes and deletes run one after another, never at the same time.
+  static Future<void> _draftQueue = Future.value();
+
+  static Future<void> _queued(Future<void> Function() job) {
+    final next = _draftQueue.then((_) => job()).catchError((_) {});
+    _draftQueue = next;
+    return next;
+  }
+
   /// The recording in progress, written often so a closed or killed app loses at most a few points.
-  static Future<void> saveDraft(Map<String, Object?> draft) async {
+  static Future<void> saveDraft(Map<String, Object?> draft) => _queued(() async {
     final f = await _draftFile();
     final tmp = File('${f.path}.tmp');
-    await tmp.writeAsString(jsonEncode(draft), flush: true);
+    // Long hikes: encode off the UI thread so the map stays smooth on standard phones.
+    final long = (draft['points'] as List?)?.length ?? 0;
+    final text = long > 1000 ? await compute(jsonEncode, draft) : jsonEncode(draft);
+    await tmp.writeAsString(text, flush: true);
     await tmp.rename(f.path);
-  }
+  });
 
   static Future<Map<String, dynamic>?> loadDraft() async {
     try {
@@ -190,10 +217,10 @@ class RecordingStore {
     }
   }
 
-  static Future<void> clearDraft() async {
+  static Future<void> clearDraft() => _queued(() async {
     final f = await _draftFile();
     if (await f.exists()) await f.delete();
-  }
+  });
 
   static Future<Directory> _dir() async {
     final d = Directory('${(await getApplicationDocumentsDirectory()).path}/recordings');

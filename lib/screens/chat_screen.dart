@@ -115,13 +115,19 @@ class _CommunityChat extends StatefulWidget {
   State<_CommunityChat> createState() => _CommunityChatState();
 }
 
-class _CommunityChatState extends State<_CommunityChat> {
+class _CommunityChatState extends State<_CommunityChat> with WidgetsBindingObserver {
   static const _poll = Duration(seconds: 5);
+
+  /// The server lists deletions of the last 90 s; after a longer gap the list is loaded again.
+  static const _staleAfter = Duration(seconds: 80);
 
   final _input = TextEditingController();
   final _messages = <ChatMessage>[];
   final _gone = <int>{};
   Timer? _timer;
+  int _cursor = 0; // newest id seen from the server (not from our own sends)
+  DateTime _polledAt = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _appVisible = true;
   bool _loading = false, _loadingOlder = false, _sending = false, _hasMore = false, _loaded = false;
   Object? _error;
 
@@ -137,19 +143,41 @@ class _CommunityChatState extends State<_CommunityChat> {
     _sync();
   }
 
-  /// Load once when first shown; poll for new messages only while visible.
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appVisible = state == AppLifecycleState.resumed;
+    _sync();
+  }
+
+  /// Load when first shown or after being away long enough to miss deletions;
+  /// poll for new messages only while the chat is on screen.
   void _sync() {
-    if (widget.active && !_loaded && !_loading) _load();
-    if (widget.active && _timer == null) {
+    final onScreen = widget.active && _appVisible;
+    if (onScreen && !_loading && (!_loaded || DateTime.now().difference(_polledAt) > _staleAfter)) _load();
+    if (onScreen && _timer == null) {
       _timer = Timer.periodic(_poll, (_) => _newer());
-    } else if (!widget.active) {
+    } else if (!onScreen) {
       _timer?.cancel();
       _timer = null;
     }
   }
 
+  void _seen(Iterable<ChatMessage> ms) {
+    for (final m in ms) {
+      if (m.id > _cursor) _cursor = m.id;
+    }
+    _polledAt = DateTime.now();
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     _input.dispose();
     super.dispose();
@@ -169,9 +197,11 @@ class _CommunityChatState extends State<_CommunityChat> {
         _messages
           ..clear()
           ..addAll(page.messages);
+        _gone.clear();
         _hasMore = page.hasMore;
         _loaded = true;
       });
+      _seen(page.messages);
     } catch (e) {
       if (mounted) setState(() => _error = e);
     } finally {
@@ -182,13 +212,16 @@ class _CommunityChatState extends State<_CommunityChat> {
   Future<void> _newer() async {
     if (!_loaded || _loading || !mounted) return;
     try {
-      final page = await _api.messages(after: _messages.isEmpty ? 0 : _messages.last.id);
+      final page = await _api.messages(after: _cursor);
       if (!mounted) return;
       final known = _messages.map((m) => m.id).toSet();
       setState(() {
-        _messages.addAll(page.messages.where((m) => !known.contains(m.id)));
+        _messages
+          ..addAll(page.messages.where((m) => !known.contains(m.id)))
+          ..sort((a, b) => a.id.compareTo(b.id));
         _gone.addAll(page.deleted);
       });
+      _seen(page.messages);
     } catch (_) {
       // Polling stays quiet; the next tick tries again.
     }

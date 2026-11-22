@@ -10,8 +10,31 @@ import 'api.dart';
 class AppState extends ChangeNotifier {
   AppState(this.api) {
     api.onUnauthorized = () {
-      if (user != null) signOut();
+      if (user == null) return;
+      if (recording) {
+        // Never end a hike's recording: drop the token, say so, sign out once it is finished.
+        api.token = null;
+        sessionExpired = true;
+        notifyListeners();
+      } else {
+        signOut();
+      }
     };
+  }
+
+  /// A GPS recording is running (set by the Rekam tab). Signing out waits for it.
+  bool recording = false;
+
+  /// The server rejected the token while recording; the user signs in again afterwards.
+  bool sessionExpired = false;
+
+  /// Closes screens opened over the tabs when the user is signed out (set in main).
+  void Function()? onSignedOut;
+
+  void setRecording(bool value) {
+    if (recording == value) return;
+    recording = value;
+    if (!value && sessionExpired) signOut();
   }
 
   final Api api;
@@ -75,6 +98,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> signIn(AuthResult result) async {
+    sessionExpired = false;
     api.token = result.token;
     user = result.user;
     await _secure.write(key: 'sso_token', value: result.token);
@@ -90,7 +114,9 @@ class AppState extends ChangeNotifier {
 
   Future<void> signOut() async {
     user = null;
+    sessionExpired = false;
     await _clear();
+    onSignedOut?.call();
     notifyListeners();
   }
 

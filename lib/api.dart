@@ -12,6 +12,11 @@ class Api {
   /// flutter run --dart-define=RUTESTRIP_API=http://127.0.0.1:8000 (debug builds only allow cleartext to localhost).
   static const baseUrl = String.fromEnvironment('RUTESTRIP_API', defaultValue: 'https://rutestrip.ai.id');
 
+  /// Release builds talk HTTPS only (Android's network config cannot stop dart:io).
+  static void checkBaseUrl() {
+    if (kReleaseMode && !baseUrl.startsWith('https://')) throw StateError('RuteStrip release builds need an https server');
+  }
+
   final http.Client _client = http.Client();
   String lang = 'id';
   String? token;
@@ -37,7 +42,7 @@ class Api {
         _ => _client.post(uri, headers: {..._headers, 'Content-Type': 'application/json'}, body: jsonEncode(body ?? {})),
       };
       res = await req.timeout(timeout);
-    } on SocketException {
+    } on IOException {
       throw const ApiException(ApiError.network);
     } on TimeoutException {
       throw const ApiException(ApiError.network);
@@ -56,7 +61,11 @@ class Api {
       data = null;
     }
 
-    if (res.statusCode >= 200 && res.statusCode < 300) return data;
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      // A Wi-Fi login page or proxy answers 200 with HTML: that is not RuteStrip, so treat it as no connection.
+      if (data is! Map && data is! List) throw const ApiException(ApiError.network);
+      return data;
+    }
 
     final map = data is Map ? data : const {};
     final err = map['error']?.toString();
@@ -170,7 +179,7 @@ class Api {
     http.Response res;
     try {
       res = await http.Response.fromStream(await _client.send(req).timeout(const Duration(minutes: 3)));
-    } on SocketException {
+    } on IOException {
       throw const ApiException(ApiError.network);
     } on TimeoutException {
       throw const ApiException(ApiError.network);

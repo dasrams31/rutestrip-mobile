@@ -8,6 +8,7 @@ import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/contour_header.dart';
 import 'route_detail_screen.dart';
+import '../widgets/gpx_actions.dart';
 import 'recording_screen.dart';
 import 'results_screen.dart';
 import 'settings_screen.dart';
@@ -36,7 +37,7 @@ class _AccountScreenState extends State<AccountScreen> {
     final lang = AppScope.of(context).lang;
     if (_lang != lang) {
       _lang = lang;
-      _reload();
+      if (mounted) _reload();
     }
   }
 
@@ -77,7 +78,7 @@ class _AccountScreenState extends State<AccountScreen> {
     );
     if (ok == true) {
       await RecordingStore.remove(r.id);
-      _reload();
+      if (mounted) _reload();
     }
   }
 
@@ -108,7 +109,13 @@ class _AccountScreenState extends State<AccountScreen> {
                   Text(user.email, style: const TextStyle(color: RS.onDarkSoft, fontSize: 15)),
                   const SizedBox(height: 14),
                   OutlinedButton.icon(
-                    onPressed: () => state.signOut(),
+                    onPressed: () {
+                      if (state.recording) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context, 'record.busy'))));
+                      } else {
+                        state.signOut();
+                      }
+                    },
                     style: OutlinedButton.styleFrom(
                       foregroundColor: Colors.white,
                       side: const BorderSide(color: Colors.white70),
@@ -127,7 +134,7 @@ class _AccountScreenState extends State<AccountScreen> {
                   borderRadius: BorderRadius.circular(10),
                   onTap: () async {
                     await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const UploadScreen()));
-                    _reload();
+                    if (mounted) _reload();
                   },
                   child: Padding(
                     padding: const EdgeInsets.all(16),
@@ -158,7 +165,7 @@ class _AccountScreenState extends State<AccountScreen> {
                 child: TextButton.icon(
                   onPressed: () async {
                     await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const BatchUploadScreen()));
-                    _reload();
+                    if (mounted) _reload();
                   },
                   icon: const Icon(Icons.library_add_outlined),
                   label: Text(tr(context, 'batch.title')),
@@ -183,6 +190,23 @@ class _AccountScreenState extends State<AccountScreen> {
               },
             ),
             _title(context, 'me.recordings'),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () async {
+                    final r = await importGpx(context);
+                    if (r == null || !context.mounted) return;
+                    _reload();
+                    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => RecordingScreen(recording: r)));
+                    if (mounted) _reload();
+                  },
+                  icon: const Icon(Icons.file_open_outlined),
+                  label: Text(tr(context, 'gpx.import')),
+                ),
+              ),
+            ),
             FutureBuilder<List<Recording>>(
               future: _recordings,
               builder: (context, snap) {
@@ -199,7 +223,7 @@ class _AccountScreenState extends State<AccountScreen> {
                           InkWell(
                             onTap: () async {
                               await Navigator.of(context).push(MaterialPageRoute(builder: (_) => RecordingScreen(recording: r)));
-                              _reload();
+                              if (mounted) _reload();
                             },
                             child: Row(
                               children: [
@@ -235,7 +259,7 @@ class _AccountScreenState extends State<AccountScreen> {
                               TextButton(
                                 onPressed: () async {
                                   await Navigator.of(context).push(MaterialPageRoute(builder: (_) => UploadScreen(recording: r)));
-                                  _reload();
+                                  if (mounted) _reload();
                                 },
                                 child: Text(tr(context, 'me.recording.upload')),
                               ),
@@ -277,7 +301,7 @@ class _AccountScreenState extends State<AccountScreen> {
         builder: (_) => RouteDetailScreen(id: r.id, name: r.name),
       ),
     );
-    _reload();
+    if (mounted) _reload();
   }
 
   Widget _title(BuildContext context, String key) => Padding(

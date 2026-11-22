@@ -10,6 +10,7 @@ import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/contour_header.dart';
 import '../widgets/elevation_chart.dart';
+import '../widgets/gpx_actions.dart';
 import '../widgets/trail_map.dart';
 import 'record_screen.dart';
 import 'upload_screen.dart';
@@ -165,7 +166,9 @@ class _RecordingScreenState extends State<RecordingScreen> {
                               child: StatItem(label: tr(context, 'record.distance'), value: '${fmtNum(context, r.distanceKm, 2)} km'),
                             ),
                             Expanded(
-                              child: StatItem(label: tr(context, 'rec.moving'), value: fmtHours(context, r.movingSeconds / 3600)),
+                              child: r.imported
+                                  ? StatItem(label: tr(context, 'gpx.naismith'), value: fmtHours(context, r.distanceKm / 5 + r.gainM / 600))
+                                  : StatItem(label: tr(context, 'rec.moving'), value: fmtHours(context, r.movingSeconds / 3600)),
                             ),
                           ],
                         ),
@@ -175,13 +178,14 @@ class _RecordingScreenState extends State<RecordingScreen> {
                             Expanded(
                               child: StatItem(label: tr(context, 'record.gain'), value: '${fmtNum(context, r.gainM)} m'),
                             ),
-                            Expanded(
-                              child: StatItem(label: tr(context, 'rec.speed'), value: '${fmtNum(context, r.speedKmh, 1)} ${tr(context, 'cond.kmh')}'),
-                            ),
+                            if (!r.imported)
+                              Expanded(
+                                child: StatItem(label: tr(context, 'rec.speed'), value: '${fmtNum(context, r.speedKmh, 1)} ${tr(context, 'cond.kmh')}'),
+                              ),
                           ],
                         ),
                         const SizedBox(height: 10),
-                        Text(tr(context, 'rec.note'), style: const TextStyle(fontSize: 12.5, color: RS.muted, height: 1.4)),
+                        Text(tr(context, r.imported ? 'gpx.note' : 'rec.note'), style: const TextStyle(fontSize: 12.5, color: RS.muted, height: 1.4)),
                       ],
                     ),
                   ),
@@ -231,6 +235,11 @@ class _RecordingScreenState extends State<RecordingScreen> {
                   spacing: 8,
                   runSpacing: 8,
                   children: [
+                    FilledButton.icon(
+                      onPressed: () => followInRecord(context, r),
+                      icon: const Icon(Icons.radio_button_checked),
+                      label: Text(tr(context, 'gpx.follow')),
+                    ),
                     FilledButton.icon(onPressed: _share, icon: const Icon(Icons.share), label: Text(tr(context, 'rec.share'))),
                     OutlinedButton.icon(
                       onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => UploadScreen(recording: r))),

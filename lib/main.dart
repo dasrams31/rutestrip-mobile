@@ -8,9 +8,13 @@ import 'screens/onboarding_screen.dart';
 import 'screens/shell.dart';
 import 'theme.dart';
 
+/// Root navigator: lets a sign-out close pages opened above the tabs.
+final rootNavigator = GlobalKey<NavigatorState>();
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  final state = AppState(Api());
+  Api.checkBaseUrl();
+  final state = AppState(Api())..onSignedOut = () => rootNavigator.currentState?.popUntil((r) => r.isFirst);
   runApp(RuteStripApp(state: state));
   await state.load();
 }
@@ -27,6 +31,7 @@ class RuteStripApp extends StatelessWidget {
       child: ListenableBuilder(
         listenable: state,
         builder: (context, _) => MaterialApp(
+          navigatorKey: rootNavigator,
           title: 'RuteStrip',
           debugShowCheckedModeBanner: false,
           theme: buildTheme(),

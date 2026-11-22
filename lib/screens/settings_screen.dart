@@ -120,6 +120,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _logoutEverywhere() async {
+    if (AppScope.read(context).recording) {
+      _toast(tr(context, 'record.busy'));
+      return;
+    }
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(

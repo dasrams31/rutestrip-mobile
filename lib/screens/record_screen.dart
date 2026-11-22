@@ -8,6 +8,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart' hide Path;
 import 'package:material_ui/material_ui.dart';
+import 'package:permission_handler/permission_handler.dart' as ph;
 
 import '../api.dart';
 import '../app_state.dart';
@@ -17,6 +18,7 @@ import '../storage.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/contour_header.dart';
+import '../widgets/gpx_actions.dart';
 import '../widgets/trail_map.dart';
 
 /// Route to follow while recording, set by "Rekam di jalur ini" on a route page.
@@ -49,13 +51,16 @@ class RecordScreen extends StatefulWidget {
 class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver {
   static const _maxAccuracyM = 30.0; // fixes worse than this are skipped
   static const _gainStepM = 3.0; // altitude changes smaller than this are GPS noise
-  static const _maxAgeS = 30; // older fixes are cached positions, not this walk
+  static const _minStepM = 5.0; // smaller moves (or within the fix accuracy) are standing still
   static const _maxSpeedMs = 15.0; // 54 km/h: faster jumps are GPS errors
   static const _offRouteMinM = 40.0; // off the trail from here (or 1.5x the GPS accuracy)
 
   final _map = MapController();
   final _points = <TrackPoint>[];
   final _waypoints = <Waypoint>[];
+  final _segStarts = <int>[0]; // first point of each part (new part after pause or restore)
+  final _recordedLL = <LatLng>[]; // map copy of _points, kept in step (no remapping per frame)
+  List<LatLng> _plannedLL = const [];
   StreamSubscription<Position>? _sub, _preview;
   StreamSubscription<CompassEvent>? _compass;
   Timer? _ticker;
@@ -69,14 +74,16 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
   int _jumps = 0, _sinceDraft = 0;
   DateTime _draftAt = DateTime.now();
   String? _problem;
-  bool _problemForever = false, _restored = false;
+  bool _problemForever = false, _restored = false, _starting = false, _newSegment = false;
+  bool _appVisible = true;
 
   // Map camera: follow the hiker, and optionally turn the map with the hiker's heading.
   bool _follow = true, _turnWithHeading = false, _zoomedToHiker = false;
   double? _heading; // degrees from north, phone compass (GPS course as fallback)
-  DateTime _headingAt = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _headingAt = DateTime.fromMillisecondsSinceEpoch(0), _compassAt = DateTime.fromMillisecondsSinceEpoch(0);
   double _mapRotation = 0;
   bool _offRoute = false;
+  RouteProgress? _progress;
 
   Duration get _movingTime => _movingBefore + _moving.elapsed;
 
@@ -85,6 +92,7 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     followRoute.addListener(_onFollow);
+    _plannedLL = _toLL(followRoute.value);
     _restoreDraft();
     _syncSensors();
   }
@@ -108,26 +116,38 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    final visible = state == AppLifecycleState.resumed;
+    if (visible != _appVisible) {
+      _appVisible = visible;
+      _syncSensors(); // compass and preview only while someone can see them
+    }
     // Leaving the app: write the draft now, the system may close the app later.
     if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) _saveDraft();
   }
 
+  static List<LatLng> _toLL(RouteDetail? r) => r?.coordinates.map((p) => LatLng(p[0], p[1])).toList() ?? const [];
+
+  void _setRecording(bool on) => AppScope.read(context).setRecording(on);
+
   // ---------------------------------------------------------------------------
-  // Sensors: compass while the tab is visible; a light position preview before recording.
+  // Sensors: compass while the tab is on screen; a light position preview before recording.
+  // The recording itself does not need either, so a hidden tab or a locked phone stops them.
   // ---------------------------------------------------------------------------
 
   Future<void> _syncSensors() async {
-    final visible = widget.active || _status == _Status.recording;
-    if (visible && _compass == null) {
-      _compass = FlutterCompass.events?.listen(_onCompass);
-    } else if (!visible) {
+    final onScreen = widget.active && _appVisible;
+    if (onScreen && _compass == null) {
+      _compass = FlutterCompass.events?.listen(_onCompass, onError: (_) {});
+    } else if (!onScreen && _compass != null) {
       await _compass?.cancel();
       _compass = null;
     }
-    if (widget.active && _status == _Status.idle && _preview == null) {
+    if (onScreen && _status == _Status.idle && _preview == null) {
       final p = await Geolocator.checkPermission();
-      if (!mounted || !(p == LocationPermission.always || p == LocationPermission.whileInUse)) return;
+      if (!(p == LocationPermission.always || p == LocationPermission.whileInUse)) return;
       if (!await Geolocator.isLocationServiceEnabled()) return;
+      // Things may have changed during the awaits: only start if still wanted and not started.
+      if (!mounted || !widget.active || !_appVisible || _status != _Status.idle || _preview != null) return;
       _preview = Geolocator.getPositionStream(
         locationSettings: AndroidSettings(
           accuracy: LocationAccuracy.high,
@@ -136,9 +156,10 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
           intervalDuration: const Duration(seconds: 5),
         ),
       ).listen(_onPreview, onError: (_) {});
-    } else if (!widget.active || _status != _Status.idle) {
-      await _preview?.cancel();
+    } else if ((!onScreen || _status != _Status.idle) && _preview != null) {
+      final old = _preview;
       _preview = null;
+      await old?.cancel();
     }
   }
 
@@ -146,6 +167,7 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
     final h = e.heading;
     if (h == null || !mounted) return;
     final now = DateTime.now();
+    _compassAt = now;
     final prev = _heading;
     // At most ~10 updates a second and only for a visible change: light on standard phones.
     if (prev != null && (((h - prev + 540) % 360) - 180).abs() < 2) return;
@@ -159,6 +181,7 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
     if (!mounted || _status != _Status.idle) return;
     setState(() => _last = p);
     _autoCamera(p);
+    _checkRoute(p);
   }
 
   // ---------------------------------------------------------------------------
@@ -167,7 +190,11 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
 
   void _onFollow() {
     if (!mounted) return;
-    setState(() {});
+    setState(() {
+      _plannedLL = _toLL(followRoute.value);
+      _progress = null;
+      _offRoute = false;
+    });
     if (followRoute.value != null) WidgetsBinding.instance.addPostFrameCallback((_) => _fitAll());
   }
 
@@ -184,11 +211,7 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
 
   /// The followed trail, what was recorded and the hiker, all on screen.
   void _fitAll() {
-    final pts = <LatLng>[
-      ...?followRoute.value?.coordinates.map((p) => LatLng(p[0], p[1])),
-      ..._points.map((p) => LatLng(p.lat, p.lng)),
-      if (_last != null) LatLng(_last!.latitude, _last!.longitude),
-    ];
+    final pts = <LatLng>[..._plannedLL, ..._recordedLL, if (_last != null) LatLng(_last!.latitude, _last!.longitude)];
     if (pts.isEmpty) return;
     setState(() => _follow = false);
     try {
@@ -260,46 +283,75 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
       setState(() => _problem = 'record.permission');
       return false;
     }
+    // "Approximate location" (Android 12+) is 1-3 km: every fix would be thrown away.
+    if (await Geolocator.getLocationAccuracy() == LocationAccuracyStatus.reduced) {
+      setState(() {
+        _problem = 'record.precise';
+        _problemForever = true;
+      });
+      return false;
+    }
+    // Android 13+: the "recording" notification needs this; the recording works without it.
+    try {
+      await ph.Permission.notification.request();
+    } catch (_) {}
     return true;
   }
 
   Future<void> _start() async {
-    if (!await _ready() || !mounted) return;
-    final lang = AppScope.read(context).lang;
-    await _preview?.cancel();
-    _preview = null;
-    _startedAt ??= DateTime.now();
-    _restored = false;
-    _moving.start();
-    _sub = Geolocator.getPositionStream(
-      locationSettings: AndroidSettings(
-        accuracy: LocationAccuracy.best,
-        // GPS chip directly: works in the mountains without mobile data or Play services.
-        forceLocationManager: true,
-        distanceFilter: 5,
-        intervalDuration: const Duration(seconds: 3),
-        foregroundNotificationConfig: ForegroundNotificationConfig(
-          notificationTitle: trLang(lang, 'record.title'),
-          notificationText: trLang(lang, 'record.note').split(';').first,
-          enableWakeLock: true,
-          setOngoing: true,
-          notificationIcon: const AndroidResource(name: 'ic_launcher', defType: 'mipmap'),
+    if (_starting || _sub != null) return; // a second tap while starting must not open a second stream
+    _starting = true;
+    try {
+      if (!await _ready() || !mounted) return;
+      final lang = AppScope.read(context).lang;
+      final old = _preview;
+      _preview = null;
+      await old?.cancel();
+      if (!mounted) return;
+      _startedAt ??= DateTime.now();
+      _restored = false;
+      if (_points.isNotEmpty) _newSegment = true; // resuming: the gap is not walked distance
+      _moving.start();
+      _sub = Geolocator.getPositionStream(
+        locationSettings: AndroidSettings(
+          accuracy: LocationAccuracy.best,
+          // GPS chip directly: works in the mountains without mobile data or Play services.
+          forceLocationManager: true,
+          distanceFilter: 5,
+          intervalDuration: const Duration(seconds: 3),
+          foregroundNotificationConfig: ForegroundNotificationConfig(
+            notificationTitle: trLang(lang, 'record.title'),
+            notificationText: trLang(lang, 'record.note').split(';').first,
+            enableWakeLock: true,
+            setOngoing: true,
+            notificationIcon: const AndroidResource(name: 'ic_launcher', defType: 'mipmap'),
+          ),
         ),
-      ),
-    ).listen(_onPosition, onError: _onLocationError);
-    _ticker = Timer.periodic(const Duration(seconds: 1), (_) => setState(() {}));
-    setState(() => _status = _Status.recording);
-    _syncSensors();
-    _saveDraft();
+      ).listen(_onPosition, onError: _onLocationError);
+      _ticker?.cancel();
+      _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (mounted) setState(() {});
+      });
+      setState(() => _status = _Status.recording);
+      _setRecording(true);
+      _saveDraft();
+    } finally {
+      _starting = false;
+    }
+  }
+
+  void _stopStream() {
+    _sub?.cancel();
+    _sub = null;
+    _ticker?.cancel();
+    _ticker = null;
+    _moving.stop();
   }
 
   /// The stream failed: stop cleanly and say why instead of looking like it still records.
   void _onLocationError(Object e) {
     if (kDebugMode) debugPrint('RuteStrip location error: $e');
-    _sub?.cancel();
-    _sub = null;
-    _ticker?.cancel();
-    _moving.stop();
+    _stopStream();
     if (!mounted) return;
     setState(() {
       _problem = switch (e) {
@@ -309,35 +361,45 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
       };
       _status = _points.isEmpty ? _Status.idle : _Status.paused;
     });
+    _setRecording(false);
     _saveDraft();
+    _syncSensors();
   }
 
   void _onPosition(Position p) {
     if (!mounted) return;
     setState(() {
       _last = p;
-      // No compass sensor: the GPS course is the heading while walking.
-      if (_compass == null && p.speed > 0.6 && p.heading >= 0) _heading = p.heading;
+      // No compass reading for a few seconds (no sensor, or it stopped): the GPS course is the heading while walking.
+      if (DateTime.now().difference(_compassAt).inSeconds > 3 && p.speed > 0.6 && p.heading >= 0) _heading = p.heading;
     });
     _autoCamera(p);
     _checkRoute(p);
     if (_status != _Status.recording || p.accuracy > _maxAccuracyM) return;
 
     final point = TrackPoint(p.latitude, p.longitude, p.altitude == 0 ? null : p.altitude, p.timestamp.toUtc());
-    // A cached fix from before the recording, or a jump no hiker can make, is not part of the walk.
-    if (DateTime.now().toUtc().difference(point.time).inSeconds > _maxAgeS) return;
     if (_points.isNotEmpty) {
       final prev = _points.last;
+      // GPS time only moves forward; an older fix is a stale one. (The phone clock is never used.)
+      if (!point.time.isAfter(prev.time)) return;
       final step = Geolocator.distanceBetween(prev.lat, prev.lng, point.lat, point.lng);
       final seconds = point.time.difference(prev.time).inMilliseconds / 1000;
-      if (seconds <= 0 || step / seconds > _maxSpeedMs) {
+      if (_newSegment) {
+        // First fix after a pause or restore: start a new part, the gap is not counted.
+        _newSegment = false;
+        _jumps = 0;
+        _segStarts.add(_points.length);
+      } else if (step / seconds > _maxSpeedMs) {
         // Three jumps in a row from a lone first point: that first point was the bad one.
         if (++_jumps >= 3 && _points.length == 1) {
           _points.clear();
+          _recordedLL.clear();
           _jumps = 0;
         } else {
           return;
         }
+      } else if (step < math.max(_minStepM, p.accuracy)) {
+        return; // standing still: GPS wobble is not distance
       } else {
         _jumps = 0;
         _distanceM += step;
@@ -355,6 +417,7 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
       }
     }
     _points.add(point);
+    _recordedLL.add(LatLng(point.lat, point.lng));
     // Draft every 5 points or 10 seconds: a killed app loses at most a few seconds of walking.
     if (++_sinceDraft >= 5 || DateTime.now().difference(_draftAt).inSeconds >= 10) _saveDraft();
   }
@@ -363,19 +426,25 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
   void _checkRoute(Position p) {
     final route = followRoute.value?.coordinates ?? const <List<double>>[];
     final prog = routeProgress(route, p.latitude, p.longitude);
-    if (prog == null) return;
+    if (prog == null) {
+      if (_progress != null) setState(() => _progress = null);
+      return;
+    }
     final limit = math.max(_offRouteMinM, p.accuracy * 1.5);
     final off = _offRoute ? prog.offRouteM > limit * 0.7 : prog.offRouteM > limit;
     if (off && !_offRoute && _status == _Status.recording) HapticFeedback.heavyImpact();
-    if (off != _offRoute) setState(() => _offRoute = off);
+    setState(() {
+      _progress = prog;
+      _offRoute = off;
+    });
   }
 
-  void _pause() {
-    _sub?.cancel();
-    _sub = null;
-    _ticker?.cancel();
-    _moving.stop();
+  /// [release]: let a pending sign-out happen. Finishing keeps it back until the
+  /// recording is saved or discarded, so the save dialog is never pulled away.
+  void _pause({bool release = true}) {
+    _stopStream();
     setState(() => _status = _Status.paused);
+    if (release) _setRecording(false);
     _saveDraft();
     _syncSensors();
   }
@@ -386,22 +455,24 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
     final kind = await showModalBottomSheet<String>(
       context: context,
       builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-              child: Text(tr(context, 'wpt.title').toUpperCase(), style: RS.head(26, color: RS.z9)),
-            ),
-            for (final e in waypointKinds.entries)
-              ListTile(
-                minTileHeight: 52,
-                leading: Icon(e.value, color: RS.z7),
-                title: Text(tr(context, 'wpt.${e.key}')),
-                onTap: () => Navigator.pop(context, e.key),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                child: Text(tr(context, 'wpt.title').toUpperCase(), style: RS.head(26, color: RS.z9)),
               ),
-          ],
+              for (final e in waypointKinds.entries)
+                ListTile(
+                  minTileHeight: 52,
+                  leading: Icon(e.value, color: RS.z7),
+                  title: Text(tr(context, 'wpt.${e.key}')),
+                  onTap: () => Navigator.pop(context, e.key),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -414,7 +485,7 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
   }
 
   Future<void> _finish() async {
-    _pause();
+    _pause(release: false);
     if (_points.length < 2) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context, 'record.too_short'))));
       await _reset();
@@ -438,6 +509,10 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
       ),
     );
     if (!mounted) return;
+    if (keep == null) {
+      _setRecording(false); // dialog closed without a choice: keep the draft, nothing is lost
+      return;
+    }
     if (keep == true) {
       await RecordingStore.save(
         Recording(
@@ -449,6 +524,7 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
           gainM: _gainM,
           movingSeconds: _movingTime.inSeconds,
           waypoints: List.of(_waypoints),
+          segmentStarts: List.of(_segStarts),
         ),
       );
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context, 'record.saved'))));
@@ -468,20 +544,29 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
           ],
         ),
       );
-      if (sure == true) await _reset();
+      if (sure == true) {
+        await _reset();
+      } else {
+        _setRecording(false);
+      }
     }
   }
 
   Future<void> _reset() async {
-    await RecordingStore.clearDraft();
+    await RecordingStore.clearDraft(); // queued after any pending draft write
     if (!mounted) return;
     setState(() {
       _points.clear();
+      _recordedLL.clear();
       _waypoints.clear();
+      _segStarts
+        ..clear()
+        ..add(0);
       _distanceM = 0;
       _gainM = 0;
       _refEle = null;
       _jumps = 0;
+      _newSegment = false;
       _startedAt = null;
       _moving.reset();
       _movingBefore = Duration.zero;
@@ -489,6 +574,7 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
       _offRoute = false;
       _status = _Status.idle;
     });
+    _setRecording(false);
     _syncSensors();
   }
 
@@ -505,6 +591,7 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
       'started_at': _startedAt!.toIso8601String(),
       'points': _points.map((p) => p.toJson()).toList(),
       'waypoints': _waypoints.map((w) => w.toJson()).toList(),
+      'segments': List.of(_segStarts),
       'distance_m': _distanceM,
       'gain_m': _gainM,
       'ref_ele': _refEle,
@@ -515,16 +602,23 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
 
   Future<void> _restoreDraft() async {
     final d = await RecordingStore.loadDraft();
-    if (d == null || !mounted) return;
+    if (d == null || !mounted || _status != _Status.idle) return;
     try {
+      final points = (d['points'] as List).map((p) => TrackPoint.fromJson(p as List)).toList();
       setState(() {
         _startedAt = DateTime.parse('${d['started_at']}');
         _points
           ..clear()
-          ..addAll((d['points'] as List).map((p) => TrackPoint.fromJson(p as List)));
+          ..addAll(points);
+        _recordedLL
+          ..clear()
+          ..addAll(points.map((p) => LatLng(p.lat, p.lng)));
         _waypoints
           ..clear()
           ..addAll((d['waypoints'] as List? ?? const []).map((w) => Waypoint.fromJson(w as Map)));
+        _segStarts
+          ..clear()
+          ..addAll((d['segments'] as List? ?? const [0]).map((e) => (e as num).toInt()));
         _distanceM = (d['distance_m'] as num).toDouble();
         _gainM = (d['gain_m'] as num).toDouble();
         _refEle = (d['ref_ele'] as num?)?.toDouble();
@@ -535,6 +629,7 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
       final f = d['follow'];
       if (f is Map && followRoute.value == null) followRoute.value = RouteDetail.fromJson(f);
       WidgetsBinding.instance.addPostFrameCallback((_) => _fitAll());
+      _syncSensors();
     } catch (_) {
       await RecordingStore.clearDraft(); // unreadable draft
     }
@@ -555,14 +650,34 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
     return h > 0 ? '$h:${m.toString().padLeft(2, '0')}:${sec.toString().padLeft(2, '0')}' : '${m.toString().padLeft(2, '0')}:${sec.toString().padLeft(2, '0')}';
   }
 
+  /// Time to the end of the trail: the hiker's own average once there is enough of it,
+  /// otherwise the flat part of Naismith's rule (5 km/h). Climbs make it longer; said in the label.
+  String _timeLeft(BuildContext context, double leftM) {
+    final hours = _movingTime.inSeconds / 3600;
+    final own = hours > 0.1 && _points.length > 10 ? _distanceM / 1000 / hours : 0.0;
+    final mine = own >= 1 && own <= 8;
+    final kmh = mine ? own : 5.0;
+    return tr(context, mine ? 'guide.eta.mine' : 'guide.eta.flat', {'t': fmtHours(context, leftM / 1000 / kmh)});
+  }
+
   String _dir(double degrees) => tr(context, 'dir.${compassIndex(degrees)}');
+
+  /// Recorded parts as separate lines (no straight line across a pause).
+  List<List<LatLng>> get _parts {
+    final out = <List<LatLng>>[];
+    for (var i = 0; i < _segStarts.length; i++) {
+      final a = _segStarts[i], b = i + 1 < _segStarts.length ? _segStarts[i + 1] : _recordedLL.length;
+      if (a < b && b <= _recordedLL.length && b - a >= 2) out.add(_recordedLL.sublist(a, b));
+    }
+    return out;
+  }
 
   @override
   Widget build(BuildContext context) {
     final follow = followRoute.value;
-    final planned = follow?.coordinates.map((p) => LatLng(p[0], p[1])).toList() ?? const <LatLng>[];
-    final recorded = _points.map((p) => LatLng(p.lat, p.lng)).toList();
+    final planned = _plannedLL;
     final here = _last == null ? null : LatLng(_last!.latitude, _last!.longitude);
+    final expired = AppScope.of(context).sessionExpired;
 
     return Scaffold(
       body: Column(
@@ -585,6 +700,13 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
               ],
             ),
           ),
+          if (expired)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              color: RS.warnBg,
+              child: Text(tr(context, 'record.session'), style: const TextStyle(color: RS.warnInk, fontSize: 13.5, height: 1.35)),
+            ),
           Expanded(
             child: Stack(
               children: [
@@ -611,15 +733,20 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
                       PolylineLayer(
                         polylines: [Polyline(points: planned, strokeWidth: 5, color: RS.z9.withValues(alpha: 0.45))],
                       ),
-                    if (recorded.length >= 2)
-                      PolylineLayer(
-                        polylines: [
-                          Polyline(points: recorded, strokeWidth: 7, color: Colors.white),
-                          Polyline(points: recorded, strokeWidth: 4.5, color: RS.z7),
+                    PolylineLayer(
+                      polylines: [
+                        for (final part in _parts) ...[
+                          Polyline(points: part, strokeWidth: 7, color: Colors.white),
+                          Polyline(points: part, strokeWidth: 4.5, color: RS.z7),
                         ],
-                      ),
+                      ],
+                    ),
                     MarkerLayer(
                       markers: [
+                        if (planned.length >= 2) ...[
+                          Marker(point: planned.first, width: 30, height: 30, rotate: true, child: const _Flag(finish: false)),
+                          Marker(point: planned.last, width: 30, height: 30, rotate: true, child: const _Flag(finish: true)),
+                        ],
                         for (final w in _waypoints)
                           Marker(
                             point: LatLng(w.lat, w.lng),
@@ -653,8 +780,8 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
                     const OsmAttribution(),
                   ],
                 ),
-                if (follow != null && here != null) Positioned(left: 12, right: 72, top: 12, child: _guidance(context, here)),
-                Positioned(right: 12, top: 12, child: _controls(context, here)),
+                if (follow != null && here != null && _progress != null) Positioned(left: 12, right: 72, top: 12, child: _guidance(context, here, _progress!)),
+                Positioned(right: 12, top: 12, bottom: 12, child: SingleChildScrollView(child: _controls(context, here))),
               ],
             ),
           ),
@@ -664,9 +791,7 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
     );
   }
 
-  Widget _guidance(BuildContext context, LatLng here) {
-    final prog = routeProgress(followRoute.value!.coordinates, here.latitude, here.longitude);
-    if (prog == null) return const SizedBox.shrink();
+  Widget _guidance(BuildContext context, LatLng here, RouteProgress prog) {
     final toTrail = bearingDeg(here.latitude, here.longitude, prog.nearestLat, prog.nearestLng);
     return Semantics(
       liveRegion: _offRoute,
@@ -686,11 +811,13 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
                 tr(context, 'guide.off', {'m': fmtNum(context, prog.offRouteM), 'dir': _dir(toTrail)}),
                 style: const TextStyle(color: RS.warnInk, fontWeight: FontWeight.w700, fontSize: 14, height: 1.35),
               )
-            else
+            else ...[
               Text(
                 tr(context, 'guide.left', {'km': fmtNum(context, prog.leftM / 1000, 1), 'pct': (prog.fraction * 100).round()}),
                 style: const TextStyle(color: RS.ink, fontWeight: FontWeight.w700, fontSize: 14),
               ),
+              Text(_timeLeft(context, prog.leftM), style: const TextStyle(color: RS.muted, fontSize: 12.5)),
+            ],
             const SizedBox(height: 6),
             ClipRRect(
               borderRadius: BorderRadius.circular(3),
@@ -754,6 +881,12 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
         btn(Icons.remove, tr(context, 'map.zoom_out'), () => _zoom(-1)),
         btn(Icons.zoom_out_map, tr(context, 'map.fit'), _fitAll),
         if (here != null) btn(_follow ? Icons.my_location : Icons.location_searching, tr(context, 'record.center'), _centerOnMe, on: _follow),
+        btn(
+          Icons.sos,
+          tr(context, 'sos.title'),
+          () => showEmergency(context, lat: _last?.latitude, lng: _last?.longitude, accuracy: _last?.accuracy),
+          child: const Icon(Icons.sos, color: RS.err),
+        ),
       ],
     );
   }
@@ -779,101 +912,134 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
         decoration: const BoxDecoration(
           border: Border(top: BorderSide(color: RS.line)),
         ),
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (_restored) ...[
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: const BoxDecoration(
-                  color: RS.warnBg,
-                  border: Border(left: BorderSide(color: RS.warnLine, width: 4)),
+        // Large text sizes: the panel scrolls instead of pushing the buttons off screen.
+        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.5),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_restored) ...[
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: const BoxDecoration(
+                    color: RS.warnBg,
+                    border: Border(left: BorderSide(color: RS.warnLine, width: 4)),
+                  ),
+                  child: Text(tr(context, 'record.restored'), style: const TextStyle(color: RS.warnInk, fontSize: 13.5, height: 1.35)),
                 ),
-                child: Text(tr(context, 'record.restored'), style: const TextStyle(color: RS.warnInk, fontSize: 13.5, height: 1.35)),
-              ),
-              const SizedBox(height: 8),
-            ],
-            if (_problem != null) ...[
+                const SizedBox(height: 8),
+              ],
+              if (_problem != null) ...[
+                Row(
+                  children: [
+                    const Icon(Icons.error_outline, color: RS.err, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(tr(context, _problem!), style: const TextStyle(color: Color(0xFF7F1D1D), fontSize: 14)),
+                    ),
+                    if (_problemForever) TextButton(onPressed: Geolocator.openAppSettings, child: Text(tr(context, 'record.settings'))),
+                  ],
+                ),
+                const SizedBox(height: 8),
+              ],
               Row(
                 children: [
-                  const Icon(Icons.error_outline, color: RS.err, size: 20),
-                  const SizedBox(width: 8),
                   Expanded(
-                    child: Text(tr(context, _problem!), style: const TextStyle(color: Color(0xFF7F1D1D), fontSize: 14)),
+                    child: _Num(label: tr(context, 'record.time'), value: _elapsed()),
                   ),
-                  if (_problemForever) TextButton(onPressed: Geolocator.openAppSettings, child: Text(tr(context, 'record.settings'))),
+                  Expanded(
+                    child: _Num(label: tr(context, 'record.distance'), value: '${fmtNum(context, _distanceM / 1000, 2)} km'),
+                  ),
+                  Expanded(
+                    child: _Num(label: tr(context, 'record.gain'), value: '${fmtNum(context, _gainM)} m'),
+                  ),
+                  Expanded(
+                    child: _Num(label: tr(context, 'record.altitude'), value: ele == null || ele == 0 ? '-' : '${fmtNum(context, ele)} m'),
+                  ),
                 ],
               ),
+              const SizedBox(height: 4),
+              Text(status, style: const TextStyle(fontSize: 12.5, color: RS.muted, height: 1.35)),
+              if (_heading != null)
+                Text(tr(context, 'record.facing', {'dir': _dir(_heading!), 'deg': _heading!.round()}), style: const TextStyle(fontSize: 12.5, color: RS.muted)),
               const SizedBox(height: 8),
+              if (_status != _Status.idle && _last != null)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    style: TextButton.styleFrom(padding: EdgeInsets.zero),
+                    onPressed: _mark,
+                    icon: const Icon(Icons.add_location_alt_outlined),
+                    label: Text('${tr(context, 'wpt.mark')}${_waypoints.isEmpty ? '' : ' (${_waypoints.length})'}'),
+                  ),
+                ),
+              switch (_status) {
+                _Status.idle => SignButton(label: tr(context, 'record.start'), onPressed: _start),
+                _Status.recording => Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(onPressed: _pause, icon: const Icon(Icons.pause), label: Text(tr(context, 'record.pause'))),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: FilledButton.icon(onPressed: _finish, icon: const Icon(Icons.stop), label: Text(tr(context, 'record.stop'))),
+                    ),
+                  ],
+                ),
+                _Status.paused => Row(
+                  children: [
+                    Expanded(
+                      child: SignButton(label: tr(context, 'record.resume'), onPressed: _start),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: FilledButton.icon(onPressed: _finish, icon: const Icon(Icons.stop), label: Text(tr(context, 'record.stop'))),
+                    ),
+                  ],
+                ),
+              },
+              if (_status == _Status.idle)
+                TextButton.icon(
+                  onPressed: () async {
+                    final r = await importGpx(context);
+                    if (r != null && context.mounted) followInRecord(context, r);
+                  },
+                  icon: const Icon(Icons.file_open_outlined),
+                  label: Text(tr(context, 'gpx.import.follow')),
+                ),
+              if (followRoute.value != null && _status == _Status.idle)
+                TextButton(
+                  onPressed: () => followRoute.value = null,
+                  child: Text('${tr(context, 'chat.cancel')}: ${followRoute.value!.name}', maxLines: 1, overflow: TextOverflow.ellipsis),
+                ),
             ],
-            Row(
-              children: [
-                Expanded(
-                  child: _Num(label: tr(context, 'record.time'), value: _elapsed()),
-                ),
-                Expanded(
-                  child: _Num(label: tr(context, 'record.distance'), value: '${fmtNum(context, _distanceM / 1000, 2)} km'),
-                ),
-                Expanded(
-                  child: _Num(label: tr(context, 'record.gain'), value: '${fmtNum(context, _gainM)} m'),
-                ),
-                Expanded(
-                  child: _Num(label: tr(context, 'record.altitude'), value: ele == null || ele == 0 ? '-' : '${fmtNum(context, ele)} m'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(status, style: const TextStyle(fontSize: 12.5, color: RS.muted, height: 1.35)),
-            if (_heading != null)
-              Text(tr(context, 'record.facing', {'dir': _dir(_heading!), 'deg': _heading!.round()}), style: const TextStyle(fontSize: 12.5, color: RS.muted)),
-            const SizedBox(height: 8),
-            if (_status != _Status.idle && _last != null)
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton.icon(
-                  style: TextButton.styleFrom(padding: EdgeInsets.zero),
-                  onPressed: _mark,
-                  icon: const Icon(Icons.add_location_alt_outlined),
-                  label: Text('${tr(context, 'wpt.mark')}${_waypoints.isEmpty ? '' : ' (${_waypoints.length})'}'),
-                ),
-              ),
-            switch (_status) {
-              _Status.idle => SignButton(label: tr(context, 'record.start'), onPressed: _start),
-              _Status.recording => Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(onPressed: _pause, icon: const Icon(Icons.pause), label: Text(tr(context, 'record.pause'))),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: FilledButton.icon(onPressed: _finish, icon: const Icon(Icons.stop), label: Text(tr(context, 'record.stop'))),
-                  ),
-                ],
-              ),
-              _Status.paused => Row(
-                children: [
-                  Expanded(
-                    child: SignButton(label: tr(context, 'record.resume'), onPressed: _start),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: FilledButton.icon(onPressed: _finish, icon: const Icon(Icons.stop), label: Text(tr(context, 'record.stop'))),
-                  ),
-                ],
-              ),
-            },
-            if (followRoute.value != null && _status == _Status.idle)
-              TextButton(
-                onPressed: () => followRoute.value = null,
-                child: Text('${tr(context, 'chat.cancel')}: ${followRoute.value!.name}', maxLines: 1, overflow: TextOverflow.ellipsis),
-              ),
-          ],
+          ),
         ),
       ),
     );
   }
+}
+
+/// Start (dark circle with a flag) and finish (checkered) of the followed trail.
+class _Flag extends StatelessWidget {
+  const _Flag({required this.finish});
+
+  final bool finish;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: tr(context, finish ? 'map.finish' : 'map.start'),
+    child: Container(
+      decoration: BoxDecoration(
+        color: finish ? Colors.white : RS.z9,
+        shape: BoxShape.circle,
+        border: Border.all(color: finish ? RS.z9 : Colors.white, width: 2),
+      ),
+      child: Icon(finish ? Icons.sports_score : Icons.flag, size: 16, color: finish ? RS.z9 : Colors.white),
+    ),
+  );
 }
 
 /// Blue position dot with a cone showing which way the phone faces.

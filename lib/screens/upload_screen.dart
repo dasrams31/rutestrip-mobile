@@ -242,7 +242,8 @@ class BatchUploadScreen extends StatefulWidget {
 enum _Item { waiting, skipped, uploading, done, failed }
 
 class _BatchUploadScreenState extends State<BatchUploadScreen> {
-  static const _max = 20;
+  static const _max = 10;
+  static const _gap = Duration(seconds: 7); // 10 uploads per minute on the server
   final _files = <({String name, String? path})>[];
   final _status = <int, (_Item, String?)>{};
   bool _clean = true, _busy = false;
@@ -268,7 +269,9 @@ class _BatchUploadScreenState extends State<BatchUploadScreen> {
     final api = AppScope.read(context).api;
     setState(() => _busy = true);
     for (final (i, f) in _files.indexed) {
-      if (_status[i]?.$1 != _Item.waiting) continue;
+      if (_status[i]?.$1 != _Item.waiting && _status[i]?.$1 != _Item.failed) continue;
+      if (_status.values.any((s) => s.$1 == _Item.done)) await Future.delayed(_gap);
+      if (!mounted) return;
       setState(() => _status[i] = (_Item.uploading, null));
       try {
         final (route, _) = await api.upload(name: _title(f.name), path: f.path!, cleanTrack: _clean);
@@ -283,7 +286,7 @@ class _BatchUploadScreenState extends State<BatchUploadScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final waiting = _status.values.where((s) => s.$1 == _Item.waiting).length;
+    final waiting = _status.values.where((s) => s.$1 == _Item.waiting || s.$1 == _Item.failed).length;
     return Scaffold(
       body: ListView(
         padding: EdgeInsets.zero,

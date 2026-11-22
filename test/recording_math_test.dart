@@ -61,4 +61,13 @@ void main() {
     expect(Recording.fromJson(r.toJson()).waypoints.single.kind, 'water');
     expect(r.speedKmh, closeTo(3.3, 0.01));
   });
+
+  test('a pause starts a new track segment in the GPX', () {
+    final t = DateTime.utc(2026, 11, 22, 2);
+    final pts = [for (var i = 0; i < 4; i++) TrackPoint(-7.45 + i * 0.001, 110.43, null, t.add(Duration(minutes: i)))];
+    final r = Recording(id: '1', name: 'S', startedAt: t, points: pts, distanceKm: 0.2, gainM: 0, movingSeconds: 60, segmentStarts: [0, 2]);
+    final gpx = r.toGpx();
+    expect('<trkseg>'.allMatches(gpx).length, 2);
+    expect(Recording.fromJson(r.toJson()).segmentStarts, [0, 2]);
+  });
 }
