@@ -402,6 +402,7 @@ class AboutScreen extends StatelessWidget {
       (Icons.article_outlined, 'about.paper', 'https://doi.org/10.32520/stmsi.v15i4.6087'),
       (Icons.send_outlined, 'about.telegram', 'https://t.me/rutestrip_hikingbot'),
       (Icons.language, 'about.website', Api.baseUrl),
+      (Icons.phone_android, 'about.appsite', 'https://app.rutestrip.ai.id'),
     ];
     return _Page(
       title: tr(context, 'about.title'),
@@ -432,6 +433,8 @@ class AboutScreen extends StatelessWidget {
         ),
         const SizedBox(height: 16),
         Text(tr(context, 'about.data'), style: const TextStyle(fontSize: 13, color: RS.muted, height: 1.5)),
+        const SizedBox(height: 12),
+        const Copyright(),
       ],
     );
   }

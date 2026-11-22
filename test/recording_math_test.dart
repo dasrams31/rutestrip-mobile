@@ -70,4 +70,27 @@ void main() {
     expect('<trkseg>'.allMatches(gpx).length, 2);
     expect(Recording.fromJson(r.toJson()).segmentStarts, [0, 2]);
   });
+
+  test('climb between two points on a trail, and Naismith time to the next stop', () {
+    // About 1.1 km north, climbing 100 m then dipping 2 m (noise) then 50 m more.
+    final route = [
+      [-7.4500, 110.43, 1800.0],
+      [-7.4450, 110.43, 1900.0],
+      [-7.4440, 110.43, 1898.0],
+      [-7.4400, 110.43, 1950.0],
+    ];
+    final p = TrailProfile(route);
+    expect(p.hasElevation, isTrue);
+    expect(p.climbBetween(0, 2000), closeTo(150, 0.5));
+    expect(p.climbBetween(600, 2000), closeTo(52, 0.5)); // starts after the first climb, from the dip
+    expect(TrailProfile.summitOf(route), route.last);
+    expect(
+      TrailProfile.summitOf([
+        [1.0, 2.0],
+        [1.1, 2.0],
+      ]),
+      isNull,
+    );
+    expect(walkHours(5000, 600), closeTo(2, 1e-9)); // 1 h walking + 1 h for 600 m up
+  });
 }

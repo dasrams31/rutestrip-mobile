@@ -22,6 +22,9 @@ import '../widgets/contour_header.dart';
 import '../widgets/gpx_actions.dart';
 import '../widgets/trail_map.dart';
 import '../mesh/mesh_service.dart';
+import 'photo_stamp_screen.dart';
+import 'live_share_sheet.dart';
+import '../live_share.dart';
 
 /// Route to follow while recording, set by "Rekam di jalur ini" on a route page.
 final followRoute = ValueNotifier<RouteDetail?>(null);
@@ -97,6 +100,8 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
   double _mapRotation = 0;
   bool _offRoute = false;
   RouteProgress? _progress;
+  TrailProfile? _profile; // of the followed trail, for the climb to the next pos
+  ({String name, double km, double hours})? _next; // next pos / water / camp / summit ahead
 
   Duration get _movingTime => _movingBefore + _moving.elapsed;
 
@@ -218,6 +223,8 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
     setState(() {
       _plannedLL = _toLL(followRoute.value);
       _progress = null;
+      _profile = null;
+      _next = null;
       _offRoute = false;
     });
     if (followRoute.value != null) WidgetsBinding.instance.addPostFrameCallback((_) => _fitAll());
@@ -462,10 +469,41 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
     final limit = math.max(_offRouteMinM, p.accuracy * 1.5);
     final off = _offRoute ? prog.offRouteM > limit * 0.7 : prog.offRouteM > limit;
     if (off && !_offRoute && _status == _Status.recording) HapticFeedback.heavyImpact();
+    final next = off ? null : _nextStop(route, prog);
     setState(() {
       _progress = prog;
       _offRoute = off;
+      _next = next;
     });
+  }
+
+  static const _stopKinds = {'pos', 'water', 'camp', 'summit'};
+
+  /// The nearest marked stop ahead on the followed trail (your own marks, the group's
+  /// marks, and the trail's summit), with distance and walking time to it.
+  ({String name, double km, double hours})? _nextStop(List<List<double>> route, RouteProgress prog) {
+    final stops = <(String, double, double)>[
+      for (final w in _waypoints)
+        if (_stopKinds.contains(w.kind)) (tr(context, 'wpt.${w.kind}'), w.lat, w.lng),
+      for (final c in mesh.chat)
+        if (_stopKinds.contains(c.body['kind']) && c.body['lat'] is num && c.body['lng'] is num)
+          ('${c.body['text'] ?? tr(context, 'wpt.${c.body['kind']}')}', (c.body['lat'] as num).toDouble(), (c.body['lng'] as num).toDouble()),
+    ];
+    final top = TrailProfile.summitOf(route);
+    if (top != null) stops.add((tr(context, 'detail.summit'), top[0], top[1]));
+    ({String name, double at})? best;
+    for (final (name, lat, lng) in stops) {
+      final at = routeProgress(route, lat, lng);
+      if (at == null || at.offRouteM > 120) continue; // not on this trail
+      if (at.doneM <= prog.doneM + 30) continue; // already passed (or right here)
+      if (best == null || at.doneM < best.at) best = (name: name, at: at.doneM);
+    }
+    if (best == null) return null;
+    final distM = best.at - prog.doneM;
+    final climb = (_profile ??= TrailProfile(route)).climbBetween(prog.doneM, best.at);
+    final hours = _movingTime.inSeconds / 3600;
+    final own = hours > 0.1 && _points.length > 10 ? _distanceM / 1000 / hours : 0.0;
+    return (name: best.name, km: distM / 1000, hours: walkHours(distM, climb, kmh: own >= 1 && own <= 8 ? own : 5));
   }
 
   /// [release]: let a pending sign-out happen. Finishing keeps it back until the
@@ -513,6 +551,22 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
     final label = tr(context, 'wpt.$kind');
     if (mesh.running) mesh.shareSpot(label, p.latitude, p.longitude, kind: kind); // the group sees it too
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context, 'wpt.added', {'name': label}))));
+  }
+
+  /// A photo with the hike info drawn on it (place, height, time, distance so far).
+  Future<void> _photo() async {
+    final p = _last;
+    await takeStampedPhoto(
+      context,
+      StampInfo(
+        title: followRoute.value?.name ?? tr(context, 'record.title'),
+        lat: p?.latitude,
+        lng: p?.longitude,
+        ele: p?.altitude,
+        distanceKm: _distanceM / 1000,
+        gainM: _gainM,
+      ),
+    );
   }
 
   /// Saves what is recorded so far as its own recording and carries on with a new one
@@ -817,7 +871,7 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
                     },
                   ),
                   children: [
-                    TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', userAgentPackageName: 'id.ai.rutestrip.app', maxZoom: 19),
+                    const BaseTiles(),
                     if (planned.length >= 2)
                       PolylineLayer(
                         polylines: [Polyline(points: planned, strokeWidth: 5, color: RS.z9.withValues(alpha: 0.45))],
@@ -930,7 +984,8 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
                   ],
                 ),
                 if (follow != null && here != null && _progress != null) Positioned(left: 12, right: 72, top: 12, child: _guidance(context, here, _progress!)),
-                Positioned(right: 12, top: 12, bottom: 12, child: SingleChildScrollView(child: _controls(context, here))),
+                // Bottom stays clear of the map credits; the column scrolls on short screens.
+                Positioned(right: 12, top: 12, bottom: 30, child: SingleChildScrollView(child: _controls(context, here))),
               ],
             ),
           ),
@@ -966,6 +1021,14 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
                 style: const TextStyle(color: RS.ink, fontWeight: FontWeight.w700, fontSize: 14),
               ),
               Text(_timeLeft(context, prog.leftM), style: const TextStyle(color: RS.muted, fontSize: 12.5)),
+              if (_next != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    tr(context, 'guide.next', {'name': _next!.name, 'km': fmtNum(context, _next!.km, 1), 't': fmtHours(context, _next!.hours)}),
+                    style: const TextStyle(color: RS.z9, fontWeight: FontWeight.w700, fontSize: 13),
+                  ),
+                ),
             ],
             const SizedBox(height: 6),
             ClipRRect(
@@ -980,7 +1043,7 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
 
   Widget _controls(BuildContext context, LatLng? here) {
     Widget btn(IconData icon, String tip, VoidCallback onTap, {bool on = false, Widget? child}) => Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.only(bottom: 6),
       child: Tooltip(
         message: tip,
         child: Material(
@@ -993,8 +1056,8 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
             onTap: onTap,
             borderRadius: BorderRadius.circular(8),
             child: SizedBox(
-              width: 48,
-              height: 48,
+              width: 46,
+              height: 46,
               child: Center(child: child ?? Icon(icon, color: on ? Colors.white : RS.z9)),
             ),
           ),
@@ -1028,7 +1091,9 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
         ),
         btn(Icons.add, tr(context, 'map.zoom_in'), () => _zoom(1)),
         btn(Icons.remove, tr(context, 'map.zoom_out'), () => _zoom(-1)),
-        btn(Icons.zoom_out_map, tr(context, 'map.fit'), _fitAll),
+        // "Show the trail and you" only means something with a trail or a recording.
+        if (_plannedLL.length >= 2 || _recordedLL.length >= 2) btn(Icons.zoom_out_map, tr(context, 'map.fit'), _fitAll),
+        btn(Icons.terrain, tr(context, topoMap.value ? 'map.topo.off' : 'map.topo'), () => setState(() => topoMap.value = !topoMap.value), on: topoMap.value),
         if (here != null) btn(_follow ? Icons.my_location : Icons.location_searching, tr(context, 'record.center'), _centerOnMe, on: _follow),
         btn(
           Icons.sos,
@@ -1120,22 +1185,39 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
               if (_heading != null)
                 Text(tr(context, 'record.facing', {'dir': _dir(_heading!), 'deg': _heading!.round()}), style: const TextStyle(fontSize: 12.5, color: RS.muted)),
               const SizedBox(height: 8),
-              if (_status != _Status.idle && _last != null)
+              if (_last != null)
                 Wrap(
                   spacing: 16,
                   children: [
-                    TextButton.icon(
-                      style: TextButton.styleFrom(padding: EdgeInsets.zero),
-                      onPressed: _mark,
-                      icon: const Icon(Icons.add_location_alt_outlined),
-                      label: Text('${tr(context, 'wpt.mark')}${_waypoints.isEmpty ? '' : ' (${_waypoints.length})'}'),
+                    if (_status != _Status.idle)
+                      TextButton.icon(
+                        style: TextButton.styleFrom(padding: EdgeInsets.zero),
+                        onPressed: _mark,
+                        icon: const Icon(Icons.add_location_alt_outlined),
+                        label: Text('${tr(context, 'wpt.mark')}${_waypoints.isEmpty ? '' : ' (${_waypoints.length})'}'),
+                      ),
+                    ListenableBuilder(
+                      listenable: LiveShare.instance,
+                      builder: (context, _) => TextButton.icon(
+                        style: TextButton.styleFrom(padding: EdgeInsets.zero),
+                        onPressed: () => showLiveShareSheet(context),
+                        icon: Icon(LiveShare.instance.active ? Icons.share_location : Icons.share_location_outlined),
+                        label: Text(tr(context, LiveShare.instance.active ? 'live.on' : 'live.button')),
+                      ),
                     ),
                     TextButton.icon(
                       style: TextButton.styleFrom(padding: EdgeInsets.zero),
-                      onPressed: _cut,
-                      icon: const Icon(Icons.content_cut),
-                      label: Text(tr(context, 'record.cut')),
+                      onPressed: _photo,
+                      icon: const Icon(Icons.photo_camera_outlined),
+                      label: Text(tr(context, 'stamp.button')),
                     ),
+                    if (_status != _Status.idle)
+                      TextButton.icon(
+                        style: TextButton.styleFrom(padding: EdgeInsets.zero),
+                        onPressed: _cut,
+                        icon: const Icon(Icons.content_cut),
+                        label: Text(tr(context, 'record.cut')),
+                      ),
                   ],
                 ),
               switch (_status) {

@@ -13,7 +13,7 @@ import '../notify.dart';
 import '../storage.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
-import '../widgets/trail_map.dart' show OsmAttribution;
+import '../widgets/trail_map.dart' show OsmAttribution, BaseTiles;
 import 'qr_scan_screen.dart';
 import 'record_screen.dart' show mapFocus, liveTrack, waypointKinds;
 import 'shell.dart';
@@ -869,7 +869,7 @@ class SharedTrackScreen extends StatelessWidget {
           backgroundColor: RS.mist,
         ),
         children: [
-          TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', userAgentPackageName: 'id.ai.rutestrip.app', maxZoom: 19),
+          const BaseTiles(),
           PolylineLayer(
             polylines: [
               Polyline(points: track, strokeWidth: 7, color: Colors.white),

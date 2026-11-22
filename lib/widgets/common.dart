@@ -198,6 +198,18 @@ class _TrackPainter extends CustomPainter {
   bool shouldRepaint(_TrackPainter old) => old.track != track;
 }
 
+/// "© 2026 Aeternum Kreasikan Bersama" with the app version, at the bottom of Saya and Tentang.
+class Copyright extends StatelessWidget {
+  const Copyright({super.key});
+
+  @override
+  Widget build(BuildContext context) => Text(
+    '© 2026 Aeternum Kreasikan Bersama · RuteStrip',
+    textAlign: TextAlign.center,
+    style: const TextStyle(fontSize: 12.5, color: RS.muted),
+  );
+}
+
 class StatItem extends StatelessWidget {
   const StatItem({super.key, required this.label, required this.value, this.note});
 

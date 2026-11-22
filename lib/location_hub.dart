@@ -5,7 +5,7 @@ import 'package:geolocator/geolocator.dart';
 import 'i18n.dart';
 
 /// Who needs the GPS, strongest last.
-enum LocNeed { preview, group, record }
+enum LocNeed { preview, share, group, record }
 
 /// The one GPS stream of the app.
 ///
@@ -81,6 +81,19 @@ class LocationHub {
       foregroundNotificationConfig: ForegroundNotificationConfig(
         notificationTitle: trLang(lang, 'notif.group.title', {'name': groupName}),
         notificationText: trLang(lang, 'notif.group'),
+        enableWakeLock: false,
+        setOngoing: true,
+        notificationIcon: const AndroidResource(name: 'ic_launcher', defType: 'mipmap'),
+      ),
+    ),
+    LocNeed.share => AndroidSettings(
+      accuracy: LocationAccuracy.high,
+      forceLocationManager: true,
+      distanceFilter: 15,
+      intervalDuration: const Duration(seconds: 30),
+      foregroundNotificationConfig: ForegroundNotificationConfig(
+        notificationTitle: trLang(lang, 'notif.share.title'),
+        notificationText: trLang(lang, 'notif.share'),
         enableWakeLock: false,
         setOngoing: true,
         notificationIcon: const AndroidResource(name: 'ic_launcher', defType: 'mipmap'),

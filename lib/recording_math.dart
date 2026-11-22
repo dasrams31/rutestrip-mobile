@@ -66,6 +66,54 @@ RouteProgress? routeProgress(List<List<double>> route, double lat, double lng) {
   return RouteProgress(offRouteM: best, doneM: bestDone, totalM: done, nearestLat: bestLat, nearestLng: bestLng);
 }
 
+/// Distance along a trail and climb between two distances on it (for "time to the next pos").
+class TrailProfile {
+  TrailProfile(List<List<double>> route) : _cum = List.filled(route.length, 0), _ele = [for (final p in route) p.length > 2 ? p[2] : null] {
+    for (var i = 1; i < route.length; i++) {
+      _cum[i] = _cum[i - 1] + distanceM(route[i - 1][0], route[i - 1][1], route[i][0], route[i][1]);
+    }
+  }
+
+  final List<double> _cum;
+  final List<double?> _ele;
+
+  bool get hasElevation => _ele.where((e) => e != null).length >= 2;
+
+  /// Metres of climb (ignoring dips under 3 m) between two along-trail distances.
+  double climbBetween(double fromM, double toM) {
+    if (!hasElevation || toM <= fromM) return 0;
+    double? ref;
+    var gain = 0.0;
+    for (var i = 0; i < _cum.length; i++) {
+      if (_cum[i] < fromM) continue;
+      if (_cum[i] > toM) break;
+      final e = _ele[i];
+      if (e == null) continue;
+      if (ref == null) {
+        ref = e;
+      } else if (e - ref >= 3) {
+        gain += e - ref;
+        ref = e;
+      } else if (ref - e >= 3) {
+        ref = e;
+      }
+    }
+    return gain;
+  }
+
+  /// The highest point of the trail as [lat, lng], or null without elevation.
+  static List<double>? summitOf(List<List<double>> route) {
+    List<double>? best;
+    for (final p in route) {
+      if (p.length > 2 && (best == null || p[2] > best[2])) best = p;
+    }
+    return best;
+  }
+}
+
+/// Walking time in hours: distance at [kmh] plus Naismith's 1 hour per 600 m of climb.
+double walkHours(double distanceM, double climbM, {double kmh = 5}) => distanceM / 1000 / kmh + climbM / 600;
+
 /// Elevation profile [[km, m], ...] of recorded points, at most [max] entries.
 List<List<double>> recordingProfile(List<({double lat, double lng, double? ele})> points, {int max = 150}) {
   final out = <List<double>>[];

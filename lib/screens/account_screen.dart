@@ -292,6 +292,7 @@ class _AccountScreenState extends State<AccountScreen> {
               },
             ),
             const _MenuCard(),
+            const Padding(padding: EdgeInsets.fromLTRB(16, 18, 16, 0), child: Copyright()),
             const SizedBox(height: 32),
           ],
         ),

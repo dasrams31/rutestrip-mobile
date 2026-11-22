@@ -298,7 +298,7 @@ class _RecordingMap extends StatelessWidget {
         backgroundColor: RS.mist,
       ),
       children: [
-        TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', userAgentPackageName: 'id.ai.rutestrip.app', maxZoom: 19),
+        const BaseTiles(),
         PolylineLayer(
           polylines: [
             Polyline(points: pts, strokeWidth: 6, color: Colors.white),

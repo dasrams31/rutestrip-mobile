@@ -199,6 +199,18 @@ class Api {
     return (recording ? null : RouteSummary.fromJson(data['data'] as Map), '${data['message'] ?? ''}');
   }
 
+  // --- live position link ------------------------------------------------------------
+
+  Future<({String token, String url, DateTime expiresAt})> liveStart(int hours, {String? label}) async {
+    final j = await _send('POST', '/api/v1/live', body: {'hours': hours, 'label': ?label}) as Map;
+    return (token: '${j['token']}', url: '${j['url']}', expiresAt: DateTime.parse('${j['expires_at']}').toLocal());
+  }
+
+  Future<void> livePosition(String token, double lat, double lng, {double? accuracy, double? elevation, int? battery}) async =>
+      _send('POST', '/api/v1/live/$token/position', body: {'lat': lat, 'lng': lng, 'acc': ?accuracy, 'ele': ?elevation, 'bat': ?battery});
+
+  Future<void> liveStop(String token) async => _send('POST', '/api/v1/live/$token/stop');
+
   /// GET /api/v1/me/submissions: uploads and recordings sent from this account, with review status.
   Future<List<Submission>> submissions() async =>
       ((await _send('GET', '/api/v1/me/submissions') as Map)['data'] as List).map((e) => Submission.fromJson(e as Map)).toList();

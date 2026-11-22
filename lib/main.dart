@@ -4,6 +4,7 @@ import 'package:material_ui/material_ui.dart';
 
 import 'api.dart';
 import 'app_state.dart';
+import 'live_share.dart';
 import 'location_hub.dart';
 import 'notify.dart';
 import 'screens/chat_screen.dart';
@@ -25,9 +26,11 @@ Future<void> main() async {
     ..onSignedOut = () {
       rootNavigator.currentState?.popUntil((r) => r.isFirst);
       mesh.leave(); // the next account on this phone must not read this group's chat
+      LiveShare.instance.signedOut();
     };
   runApp(RuteStripApp(state: state));
   await state.load();
+  if (state.signedIn) LiveShare.instance.restore(state.api);
   _syncLang(state);
   state.addListener(() => _syncLang(state));
   Notify.instance

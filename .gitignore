@@ -49,3 +49,11 @@ app.*.map.json
 
 # Emulator screenshots taken while checking screens
 /screenshots/
+
+# Release files and local material that never go to the public repo
+*.apk
+*.aab
+*.jks
+*.keystore
+key.properties
+/referensi/

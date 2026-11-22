@@ -44,7 +44,7 @@ class TrailMap extends StatelessWidget {
         ),
       ),
       children: [
-        TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', userAgentPackageName: 'id.ai.rutestrip.app', maxZoom: 19),
+        const BaseTiles(),
         PolylineLayer(
           polylines: [
             Polyline(points: points, strokeWidth: 6, color: Colors.white),
@@ -270,6 +270,16 @@ class _MapScreenState extends State<MapScreen> {
                     ),
                   ),
                 ],
+                const SizedBox(height: 8),
+                ValueListenableBuilder<bool>(
+                  valueListenable: topoMap,
+                  builder: (context, topo, _) => _MapButton(
+                    tooltip: tr(context, topo ? 'map.topo.off' : 'map.topo'),
+                    selected: topo,
+                    onPressed: () => topoMap.value = !topo,
+                    child: Icon(Icons.terrain, color: topo ? Colors.white : RS.z9),
+                  ),
+                ),
                 if (me != null) ...[
                   const SizedBox(height: 8),
                   _MapButton(
@@ -445,22 +455,50 @@ class ResultsMap extends StatelessWidget {
   }
 }
 
-/// "© OpenStreetMap contributors" in the map corner, always visible (OSM tile usage
-/// policy); tapping it opens the copyright page.
+/// Topographic map (contour lines and hill shading from OpenTopoMap) instead of the
+/// standard OpenStreetMap style, on the Rekam map and the trail maps.
+final topoMap = ValueNotifier<bool>(false);
+
+/// The map background: OpenStreetMap, or OpenTopoMap when [topoMap] is on.
+class BaseTiles extends StatelessWidget {
+  const BaseTiles({super.key});
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<bool>(
+    valueListenable: topoMap,
+    builder: (context, topo, _) => TileLayer(
+      key: ValueKey(topo),
+      urlTemplate: topo ? 'https://tile.opentopomap.org/{z}/{x}/{y}.png' : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      userAgentPackageName: 'id.ai.rutestrip.app',
+      maxZoom: 19,
+      // OpenTopoMap draws up to zoom 17; closer than that the tiles are enlarged.
+      maxNativeZoom: topo ? 17 : 19,
+    ),
+  );
+}
+
+/// Map credits in the corner, always visible (tile usage policies); tapping opens the
+/// copyright page.
 class OsmAttribution extends StatelessWidget {
   const OsmAttribution({super.key});
 
   @override
   Widget build(BuildContext context) => Align(
     alignment: Alignment.bottomRight,
-    child: Semantics(
-      link: true,
-      child: GestureDetector(
-        onTap: () => openExternal('https://www.openstreetmap.org/copyright'),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-          color: Colors.white.withValues(alpha: 0.88),
-          child: const Text('© OpenStreetMap contributors', style: TextStyle(fontSize: 11.5, color: RS.ink)),
+    child: ValueListenableBuilder<bool>(
+      valueListenable: topoMap,
+      builder: (context, topo, _) => Semantics(
+        link: true,
+        child: GestureDetector(
+          onTap: () => openExternal(topo ? 'https://opentopomap.org/about' : 'https://www.openstreetmap.org/copyright'),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+            color: Colors.white.withValues(alpha: 0.88),
+            child: Text(
+              topo ? '© OpenStreetMap contributors, SRTM · © OpenTopoMap (CC-BY-SA)' : '© OpenStreetMap contributors',
+              style: const TextStyle(fontSize: 11.5, color: RS.ink),
+            ),
+          ),
         ),
       ),
     ),
