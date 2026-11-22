@@ -7,7 +7,7 @@ import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/contour_header.dart';
 import 'results_screen.dart';
-import 'routes_screen.dart';
+import 'shell.dart';
 
 /// Search by sentence: the one focal point is the search box and its yellow button.
 class HomeScreen extends StatefulWidget {
@@ -29,7 +29,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final state = AppScope.of(context);
     if (_filtersLang != state.lang) {
       _filtersLang = state.lang;
-      _filters = state.api.filters();
+      _filters = state.api.filters()..ignore();
     }
   }
 
@@ -163,7 +163,7 @@ class _BrowseCard extends StatelessWidget {
     return Card(
       child: InkWell(
         borderRadius: BorderRadius.circular(10),
-        onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RoutesScreen())),
+        onTap: () => Shell.globalKey.currentState?.open(1),
         child: Padding(
           padding: const EdgeInsets.all(18),
           child: Row(

@@ -34,7 +34,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
   }
 
   void _load() {
-    final future = AppScope.read(context).api.search(widget.query, allRoutes: widget.allRoutes);
+    final future = AppScope.read(context).api.search(widget.query, allRoutes: widget.allRoutes)..ignore();
     setState(() {
       _future = future;
     });

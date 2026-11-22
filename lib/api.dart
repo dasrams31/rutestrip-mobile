@@ -25,9 +25,11 @@ class Api {
     final uri = Uri.parse('$baseUrl$path');
     http.Response res;
     try {
-      final req = method == 'GET'
-          ? _client.get(uri, headers: _headers)
-          : _client.post(uri, headers: {..._headers, 'Content-Type': 'application/json'}, body: jsonEncode(body ?? {}));
+      final req = switch (method) {
+        'GET' => _client.get(uri, headers: _headers),
+        'DELETE' => _client.delete(uri, headers: _headers),
+        _ => _client.post(uri, headers: {..._headers, 'Content-Type': 'application/json'}, body: jsonEncode(body ?? {})),
+      };
       res = await req.timeout(timeout);
     } on SocketException {
       throw const ApiException(ApiError.network);
@@ -37,6 +39,10 @@ class Api {
       throw const ApiException(ApiError.network);
     }
 
+    return _decode(res);
+  }
+
+  dynamic _decode(http.Response res) {
     dynamic data;
     try {
       data = res.body.isEmpty ? null : jsonDecode(res.body);
@@ -47,7 +53,10 @@ class Api {
     if (res.statusCode >= 200 && res.statusCode < 300) return data;
 
     final map = data is Map ? data : const {};
-    final message = (map['error'] ?? map['message'])?.toString();
+    final err = map['error']?.toString();
+    final isCode = err != null && RegExp(r'^[a-z_]+$').hasMatch(err);
+    // Laravel's own throttle answer ("Too Many Attempts.") is English only: use the app's sentence instead.
+    final message = res.statusCode == 429 && err == null ? null : (isCode ? map['message'] : (err ?? map['message']))?.toString();
     final fieldErrors = <String, String>{};
     if (map['errors'] is Map) {
       (map['errors'] as Map).forEach((k, v) {
@@ -56,6 +65,7 @@ class Api {
     }
     final kind = switch (res.statusCode) {
       401 => ApiError.unauthorized,
+      403 => ApiError.forbidden,
       404 => ApiError.notFound,
       422 => ApiError.validation,
       429 => ApiError.throttled,
@@ -80,7 +90,10 @@ class Api {
 
   Future<Filters> filters() async => Filters.fromJson(await _send('GET', '/api/v1/filters') as Map);
 
-  Future<RouteDetail> route(int id) async => RouteDetail.fromJson((await _send('GET', '/api/v1/routes/$id') as Map)['data'] as Map);
+  Future<RouteDetail> route(int id) async => RouteDetail.fromJson(await routeJson(id));
+
+  /// The detail as the server sent it, so it can be saved for offline use.
+  Future<Map<String, dynamic>> routeJson(int id) async => Map<String, dynamic>.from((await _send('GET', '/api/v1/routes/$id') as Map)['data'] as Map);
 
   Future<SearchResult> search(String query, {bool allRoutes = false}) async {
     final data = await _send('POST', '/api/v1/search', body: {'query': query, if (allRoutes) 'all_routes': true}, timeout: const Duration(seconds: 60));
@@ -95,6 +108,53 @@ class Api {
   Future<List<RouteSummary>> likes() async {
     final data = await _send('GET', '/api/v1/likes') as Map;
     return (data['data'] as List).map((e) => RouteSummary.fromJson(e as Map)).toList();
+  }
+
+  // --- GPX upload ------------------------------------------------------------------
+
+  /// Multipart POST /api/v1/routes. Processing on the server can take a while.
+  Future<(RouteSummary, String)> upload({required String name, String? description, required String path, bool cleanTrack = true}) async {
+    final req = http.MultipartRequest('POST', Uri.parse('$baseUrl/api/v1/routes'))
+      ..headers.addAll(_headers)
+      ..fields['name'] = name
+      ..fields['clean_track'] = cleanTrack ? '1' : '0';
+    if (description != null && description.trim().isNotEmpty) req.fields['description'] = description.trim();
+    req.files.add(await http.MultipartFile.fromPath('gpx_file', path));
+
+    http.Response res;
+    try {
+      res = await http.Response.fromStream(await _client.send(req).timeout(const Duration(minutes: 3)));
+    } on SocketException {
+      throw const ApiException(ApiError.network);
+    } on TimeoutException {
+      throw const ApiException(ApiError.network);
+    } on http.ClientException {
+      throw const ApiException(ApiError.network);
+    }
+    final data = _decode(res);
+    return (RouteSummary.fromJson((data as Map)['data'] as Map), '${data['message'] ?? ''}');
+  }
+
+  // --- community chat (Obrolan Pendaki) and assistant -----------------------------
+
+  Future<ChatPage> messages({int? after, int? before}) async {
+    final q = {'after': ?after?.toString(), 'before': ?before?.toString()};
+    final data = await _send('GET', '/api/v1/community/messages${q.isEmpty ? '' : '?${Uri(queryParameters: q).query}'}') as Map;
+    return ChatPage.fromJson(data);
+  }
+
+  Future<ChatMessage> sendMessage(String body) async =>
+      ChatMessage.fromJson((await _send('POST', '/api/v1/community/messages', body: {'body': body}) as Map)['message'] as Map);
+
+  Future<ChatMessage> deleteMessage(int id) async => ChatMessage.fromJson((await _send('DELETE', '/api/v1/community/messages/$id') as Map)['message'] as Map);
+
+  Future<ChatMessage> reportMessage(int id) async =>
+      ChatMessage.fromJson((await _send('POST', '/api/v1/community/messages/$id/report') as Map)['message'] as Map);
+
+  /// Asisten RuteStrip. History items: {role: user|assistant, text}.
+  Future<String> ask(String message, List<Map<String, String>> history) async {
+    final data = await _send('POST', '/api/v1/assistant', body: {'message': message, 'history': history}, timeout: const Duration(seconds: 45)) as Map;
+    return '${data['reply'] ?? ''}';
   }
 
   // --- account (SSO) -------------------------------------------------------------
@@ -132,7 +192,7 @@ String solveAltcha(Map<String, dynamic> c) {
   throw const ApiException(ApiError.server);
 }
 
-enum ApiError { network, unauthorized, notFound, validation, throttled, server }
+enum ApiError { network, unauthorized, forbidden, notFound, validation, throttled, server }
 
 class ApiException implements Exception {
   const ApiException(this.kind, {this.status, this.message, this.fieldErrors = const {}});
@@ -298,4 +358,34 @@ class AuthResult {
 
   final String token;
   final AppUser user;
+}
+
+class ChatMessage {
+  ChatMessage.fromJson(Map j)
+    : id = (j['id'] as num).toInt(),
+      name = '${j['name'] ?? ''}',
+      mine = j['mine'] == true,
+      deleted = j['deleted'] == true,
+      body = j['body'] as String?,
+      createdAt = DateTime.tryParse('${j['created_at'] ?? ''}')?.toLocal(),
+      canDelete = j['can_delete'] == true,
+      canReport = j['can_report'] == true,
+      reported = j['reported'] == true;
+
+  final int id;
+  final String name;
+  final bool mine, deleted, canDelete, canReport, reported;
+  final String? body;
+  final DateTime? createdAt;
+}
+
+class ChatPage {
+  ChatPage.fromJson(Map j)
+    : messages = (j['messages'] as List? ?? const []).map((e) => ChatMessage.fromJson(e as Map)).toList(),
+      hasMore = j['has_more'] == true,
+      deleted = (j['deleted'] as List? ?? const []).map((e) => (e as num).toInt()).toSet();
+
+  final List<ChatMessage> messages;
+  final bool hasMore;
+  final Set<int> deleted;
 }

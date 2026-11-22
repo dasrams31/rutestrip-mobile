@@ -3,7 +3,8 @@ import 'package:material_ui/material_ui.dart';
 
 import 'api.dart';
 import 'app_state.dart';
-import 'screens/home_screen.dart';
+import 'screens/login_screen.dart';
+import 'screens/shell.dart';
 import 'theme.dart';
 
 Future<void> main() async {
@@ -36,7 +37,12 @@ class RuteStripApp extends StatelessWidget {
             value: SystemUiOverlayStyle.light.copyWith(statusBarColor: Colors.transparent),
             child: child!,
           ),
-          home: state.ready ? const HomeScreen() : const _Splash(),
+          // Every feature needs an account (owner's choice): signed out = the login screen.
+          home: !state.ready
+              ? const _Splash()
+              : state.signedIn
+              ? Shell(key: Shell.globalKey)
+              : const LoginScreen(gate: true),
         ),
       ),
     );

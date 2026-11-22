@@ -5,8 +5,6 @@ import 'package:material_ui/material_ui.dart';
 import '../api.dart';
 import '../app_state.dart';
 import '../i18n.dart';
-import '../screens/account_screen.dart';
-import '../screens/login_screen.dart';
 import '../screens/route_detail_screen.dart';
 import '../theme.dart';
 
@@ -16,8 +14,8 @@ String errorText(BuildContext context, Object error) {
     return switch (error.kind) {
       ApiError.network => tr(context, 'error.network'),
       ApiError.notFound => tr(context, 'error.not_found'),
-      ApiError.throttled => tr(context, 'error.throttled'),
-      ApiError.validation || ApiError.unauthorized => error.message ?? tr(context, 'error.server'),
+      ApiError.throttled => error.message ?? tr(context, 'error.throttled'),
+      ApiError.validation || ApiError.unauthorized || ApiError.forbidden => error.message ?? tr(context, 'error.server'),
       ApiError.server => error.message ?? tr(context, 'error.server'),
     };
   }
@@ -406,16 +404,15 @@ class LangToggle extends StatelessWidget {
   }
 }
 
-/// Top row inside a header band: back (when possible), brand or title, language, account.
+/// Top row inside a header band: back (when possible) or the brand, an optional
+/// title, and the language switch. The account lives in the "Saya" tab.
 class HeaderBar extends StatelessWidget {
-  const HeaderBar({super.key, this.title, this.showAccount = true});
+  const HeaderBar({super.key, this.title});
 
   final String? title;
-  final bool showAccount; // off on the login screen itself
 
   @override
   Widget build(BuildContext context) {
-    final state = AppScope.of(context);
     final canPop = Navigator.of(context).canPop();
     return Row(
       children: [
@@ -432,7 +429,7 @@ class HeaderBar extends StatelessWidget {
           ),
         Expanded(
           child: title == null
-              ? const SizedBox()
+              ? const SizedBox(height: 48)
               : Text(
                   title!,
                   maxLines: 1,
@@ -441,12 +438,6 @@ class HeaderBar extends StatelessWidget {
                 ),
         ),
         const LangToggle(),
-        if (showAccount)
-          IconButton(
-            tooltip: state.signedIn ? tr(context, 'account') : tr(context, 'login'),
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => state.signedIn ? const AccountScreen() : const LoginScreen())),
-            icon: Icon(state.signedIn ? Icons.account_circle : Icons.account_circle_outlined, color: Colors.white),
-          ),
       ],
     );
   }

@@ -9,9 +9,12 @@ import '../widgets/contour_header.dart';
 
 /// Log in or sign up with the RuteStrip account (same SSO as the site and the chat).
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key, this.register = false});
+  const LoginScreen({super.key, this.register = false, this.gate = false});
 
   final bool register;
+
+  /// Shown as the app's first screen while signed out (no back button, a short intro).
+  final bool gate;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -53,7 +56,7 @@ class _LoginScreenState extends State<LoginScreen> {
           ? await state.api.register(name: _name.text.trim(), email: _email.text.trim(), password: _password.text, confirmation: _password2.text)
           : await state.api.login(_email.text.trim(), _password.text);
       await state.signIn(result);
-      if (mounted) Navigator.of(context).pop();
+      if (mounted && !widget.gate) Navigator.of(context).maybePop();
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -81,14 +84,14 @@ class _LoginScreenState extends State<LoginScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const HeaderBar(showAccount: false),
+                const HeaderBar(),
                 const SizedBox(height: 14),
                 Semantics(
                   header: true,
                   child: Text(title.toUpperCase(), style: RS.head(40, color: Colors.white)),
                 ),
                 const SizedBox(height: 8),
-                Text(tr(context, 'login.lead'), style: const TextStyle(color: Color(0xFFD1FAE5), fontSize: 15, height: 1.4)),
+                Text(tr(context, widget.gate ? 'login.gate' : 'login.lead'), style: const TextStyle(color: Color(0xFFD1FAE5), fontSize: 15, height: 1.4)),
               ],
             ),
           ),
