@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import '../i18n.dart';
+import '../storage.dart';
 import '../theme.dart';
 import 'account_screen.dart';
 import 'chat_screen.dart';
@@ -28,6 +29,15 @@ class Shell extends StatefulWidget {
 class ShellState extends State<Shell> {
   int _index = Tabs.search;
   final _built = <int>{Tabs.search};
+
+  @override
+  void initState() {
+    super.initState();
+    // A recording that was cut off (app closed, phone restarted) opens Rekam so it can be resumed.
+    RecordingStore.loadDraft().then((d) {
+      if (d != null && mounted) open(Tabs.record);
+    });
+  }
 
   /// Jump to a tab from anywhere (for example "Rekam" from a route page).
   void open(int index) => setState(() {

@@ -8,6 +8,7 @@ import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/contour_header.dart';
 import 'route_detail_screen.dart';
+import 'recording_screen.dart';
 import 'results_screen.dart';
 import 'settings_screen.dart';
 import 'upload_screen.dart';
@@ -195,26 +196,33 @@ class _AccountScreenState extends State<AccountScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            children: [
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: SizedBox(width: 64, height: 56, child: TrackThumb(track: r.points.map((p) => [p.lat, p.lng]).toList(), height: 56)),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(r.name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-                                    Text(
-                                      '${fmtNum(context, r.distanceKm, 2)} km · +${fmtNum(context, r.gainM)} m · ${fmtHours(context, r.movingSeconds / 3600)}',
-                                      style: const TextStyle(color: RS.muted, fontSize: 13.5),
-                                    ),
-                                  ],
+                          InkWell(
+                            onTap: () async {
+                              await Navigator.of(context).push(MaterialPageRoute(builder: (_) => RecordingScreen(recording: r)));
+                              _reload();
+                            },
+                            child: Row(
+                              children: [
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: SizedBox(width: 64, height: 56, child: TrackThumb(track: r.points.map((p) => [p.lat, p.lng]).toList(), height: 56)),
                                 ),
-                              ),
-                            ],
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(r.name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                                      Text(
+                                        '${fmtNum(context, r.distanceKm, 2)} km · +${fmtNum(context, r.gainM)} m · ${fmtHours(context, r.movingSeconds / 3600)}',
+                                        style: const TextStyle(color: RS.muted, fontSize: 13.5),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const Icon(Icons.chevron_right, color: RS.z7),
+                              ],
+                            ),
                           ),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.end,

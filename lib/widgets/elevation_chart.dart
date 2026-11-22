@@ -62,7 +62,7 @@ class _ProfilePainter extends CustomPainter {
       final x = left + w * i / 4;
       final align = i == 0 ? TextAlign.left : (i == 4 ? TextAlign.right : TextAlign.center);
       final dx = i == 0 ? x : (i == 4 ? x - 60 : x - 30);
-      _text(canvas, '${fmt(maxKm * i / 4, maxKm < 5 ? 1 : 0)} km', Offset(dx, size.height - bottom + 6), label, 60, align);
+      _text(canvas, '${fmt(maxKm * i / 4, maxKm < 1 ? 2 : (maxKm < 5 ? 1 : 0))} km', Offset(dx, size.height - bottom + 6), label, 60, align);
     }
 
     final line = Path()..moveTo(at(profile.first).dx, at(profile.first).dy);

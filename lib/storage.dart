@@ -76,6 +76,27 @@ class TrackPoint {
   List<Object?> toJson() => [lat, lng, ele, time.millisecondsSinceEpoch];
 }
 
+/// A point the hiker marked while recording (pos, water, camp...), saved as a GPX `wpt` element.
+class Waypoint {
+  Waypoint({required this.lat, required this.lng, required this.ele, required this.time, required this.kind});
+
+  Waypoint.fromJson(Map j)
+    : lat = (j['lat'] as num).toDouble(),
+      lng = (j['lng'] as num).toDouble(),
+      ele = (j['ele'] as num?)?.toDouble(),
+      time = DateTime.fromMillisecondsSinceEpoch((j['t'] as num).toInt(), isUtc: true),
+      kind = '${j['kind']}';
+
+  final double lat, lng;
+  final double? ele;
+  final DateTime time;
+
+  /// pos, water, camp, summit, danger or other (shown translated).
+  final String kind;
+
+  Map<String, Object?> toJson() => {'lat': lat, 'lng': lng, 'ele': ele, 't': time.millisecondsSinceEpoch, 'kind': kind};
+}
+
 /// A finished GPS recording: points plus a GPX file ready to upload.
 class Recording {
   Recording({
@@ -86,6 +107,7 @@ class Recording {
     required this.distanceKm,
     required this.gainM,
     required this.movingSeconds,
+    this.waypoints = const [],
   });
 
   Recording.fromJson(Map j)
@@ -95,7 +117,8 @@ class Recording {
       points = (j['points'] as List).map((p) => TrackPoint.fromJson(p as List)).toList(),
       distanceKm = (j['distance_km'] as num).toDouble(),
       gainM = (j['gain_m'] as num).toDouble(),
-      movingSeconds = (j['seconds'] as num).toInt();
+      movingSeconds = (j['seconds'] as num).toInt(),
+      waypoints = (j['waypoints'] as List? ?? const []).map((w) => Waypoint.fromJson(w as Map)).toList();
 
   final String id;
   String name;
@@ -103,6 +126,10 @@ class Recording {
   final List<TrackPoint> points;
   final double distanceKm, gainM;
   final int movingSeconds;
+  final List<Waypoint> waypoints;
+
+  /// Average speed while moving, km/h.
+  double get speedKmh => movingSeconds <= 0 ? 0 : distanceKm / (movingSeconds / 3600);
 
   Map<String, Object?> toJson() => {
     'id': id,
@@ -112,6 +139,7 @@ class Recording {
     'gain_m': gainM,
     'seconds': movingSeconds,
     'points': points.map((p) => p.toJson()).toList(),
+    'waypoints': waypoints.map((w) => w.toJson()).toList(),
   };
 
   String toGpx() {
@@ -119,8 +147,13 @@ class Recording {
     final b = StringBuffer()
       ..writeln('<?xml version="1.0" encoding="UTF-8"?>')
       ..writeln('<gpx version="1.1" creator="RuteStrip Android" xmlns="http://www.topografix.com/GPX/1/1">')
-      ..writeln('  <metadata><name>${esc(name)}</name><time>${startedAt.toUtc().toIso8601String()}</time></metadata>')
-      ..writeln('  <trk><name>${esc(name)}</name><trkseg>');
+      ..writeln('  <metadata><name>${esc(name)}</name><time>${startedAt.toUtc().toIso8601String()}</time></metadata>');
+    for (final w in waypoints) {
+      b.write('  <wpt lat="${w.lat.toStringAsFixed(7)}" lon="${w.lng.toStringAsFixed(7)}">');
+      if (w.ele != null) b.write('<ele>${w.ele!.toStringAsFixed(1)}</ele>');
+      b.writeln('<time>${w.time.toUtc().toIso8601String()}</time><name>${esc(waypointNames[w.kind] ?? w.kind)}</name><type>${esc(w.kind)}</type></wpt>');
+    }
+    b.writeln('  <trk><name>${esc(name)}</name><trkseg>');
     for (final p in points) {
       b.write('    <trkpt lat="${p.lat.toStringAsFixed(7)}" lon="${p.lng.toStringAsFixed(7)}">');
       if (p.ele != null) b.write('<ele>${p.ele!.toStringAsFixed(1)}</ele>');
@@ -133,7 +166,35 @@ class Recording {
   }
 }
 
+/// Waypoint names written into GPX files (Indonesian, like the website's data).
+const waypointNames = {'pos': 'Pos', 'water': 'Sumber air', 'camp': 'Tempat camp', 'summit': 'Puncak', 'danger': 'Bahaya', 'other': 'Penanda'};
+
 class RecordingStore {
+  static Future<File> _draftFile() async => File('${(await _dir()).path}/_draft.json');
+
+  /// The recording in progress, written often so a closed or killed app loses at most a few points.
+  static Future<void> saveDraft(Map<String, Object?> draft) async {
+    final f = await _draftFile();
+    final tmp = File('${f.path}.tmp');
+    await tmp.writeAsString(jsonEncode(draft), flush: true);
+    await tmp.rename(f.path);
+  }
+
+  static Future<Map<String, dynamic>?> loadDraft() async {
+    try {
+      final f = await _draftFile();
+      if (!await f.exists()) return null;
+      return Map<String, dynamic>.from(jsonDecode(await f.readAsString()) as Map);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> clearDraft() async {
+    final f = await _draftFile();
+    if (await f.exists()) await f.delete();
+  }
+
   static Future<Directory> _dir() async {
     final d = Directory('${(await getApplicationDocumentsDirectory()).path}/recordings');
     if (!await d.exists()) await d.create(recursive: true);
@@ -146,9 +207,16 @@ class RecordingStore {
     await File('$d/${r.id}.gpx').writeAsString(r.toGpx());
   }
 
-  /// Path of the GPX file (written again so a renamed recording carries its new name).
+  /// GPX file named after the recording ("merbabu-via-selo-2026-11-22.gpx") for sharing and
+  /// upload; written again each time so a renamed recording carries its new name.
   static Future<String> gpxPath(Recording r) async {
-    final f = File('${(await _dir()).path}/${r.id}.gpx');
+    final out = Directory('${(await _dir()).path}/out');
+    if (!await out.exists()) await out.create(recursive: true);
+    final t = r.startedAt.toLocal();
+    final date = '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
+    var slug = r.name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-').replaceAll(RegExp(r'^-+|-+$'), '');
+    if (slug.length > 60) slug = slug.substring(0, 60);
+    final f = File('${out.path}/${slug.isEmpty ? 'rekaman' : slug}-$date.gpx');
     await f.writeAsString(r.toGpx());
     return f.path;
   }
@@ -162,7 +230,7 @@ class RecordingStore {
   }
 
   static Future<List<Recording>> all() async {
-    final files = (await _dir()).listSync().whereType<File>().where((f) => f.path.endsWith('.json'));
+    final files = (await _dir()).listSync().whereType<File>().where((f) => f.path.endsWith('.json') && !f.uri.pathSegments.last.startsWith('_'));
     final out = <Recording>[];
     for (final f in files) {
       try {
