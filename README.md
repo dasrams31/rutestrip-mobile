@@ -28,6 +28,26 @@ flutter build apk --debug
 
 The debug APK lands in `build\app\outputs\flutter-apk\app-debug.apk`.
 
+Release APKs for testers (small, one per CPU type, signed with the debug key until a
+Play Store key is decided):
+
+```powershell
+flutter build apk --release --split-per-abi --obfuscate --split-debug-info=build/symbols
+```
+
+## Testing against a local backend
+
+Debug builds may talk plain HTTP to 127.0.0.1 only (`android/app/src/debug/res/xml`).
+Run the Laravel backend locally (scripts in `D:\dev\rutestrip-local`), then:
+
+```powershell
+adb reverse tcp:8000 tcp:8000
+```
+
+```powershell
+flutter run --dart-define=RUTESTRIP_API=http://127.0.0.1:8000
+```
+
 ## Design
 
 Follows the website's `DESIGN.md`: dark emerald header bands with the contour motif,
