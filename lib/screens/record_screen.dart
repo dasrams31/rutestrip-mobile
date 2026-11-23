@@ -646,7 +646,11 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
           maxLength: 120,
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr(context, 'record.discard'))),
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: RS.err), // throwing the recording away: red, like the confirm
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(tr(context, 'record.discard')),
+          ),
           FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(tr(context, 'record.save'))),
         ],
       ),
@@ -1183,7 +1187,10 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
                     style: const TextStyle(fontSize: 13, color: RS.warnInk, fontWeight: FontWeight.w700),
                   ),
               if (_heading != null)
-                Text(tr(context, 'record.facing', {'dir': _dir(_heading!), 'deg': _heading!.round()}), style: const TextStyle(fontSize: 12.5, color: RS.muted)),
+                Text(
+                  tr(context, 'record.facing', {'dir': _dir(_heading!), 'deg': _heading!.round() % 360}),
+                  style: const TextStyle(fontSize: 12.5, color: RS.muted),
+                ),
               const SizedBox(height: 8),
               if (_last != null)
                 Wrap(

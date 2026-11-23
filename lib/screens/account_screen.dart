@@ -179,7 +179,7 @@ class _AccountScreenState extends State<AccountScreen> {
                                     children: [
                                       Text(r.name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
                                       Text(
-                                        '${fmtNum(context, r.distanceKm, 2)} km · +${fmtNum(context, r.gainM)} m · ${fmtHours(context, r.movingSeconds / 3600)}',
+                                        '${fmtNum(context, r.distanceKm, 2)} km · +${fmtNum(context, r.gainM)} m · ${fmtHours(context, r.imported ? r.distanceKm / 5 + r.gainM / 600 : r.movingSeconds / 3600)}',
                                         style: const TextStyle(color: RS.muted, fontSize: 13.5),
                                       ),
                                     ],
