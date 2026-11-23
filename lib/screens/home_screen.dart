@@ -92,6 +92,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       children: [
                         TextFormField(
                           controller: _query,
+                          // Wraps long sentences, but Enter searches instead of adding a new line.
+                          keyboardType: TextInputType.text,
                           textInputAction: TextInputAction.search,
                           onFieldSubmitted: (_) => _search(),
                           minLines: 1,

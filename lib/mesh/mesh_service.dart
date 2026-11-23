@@ -171,7 +171,7 @@ class MeshService extends ChangeNotifier {
     await _loadChat();
     await _saveGroup(on: false);
     notifyListeners();
-    await start();
+    // The screen turns the radios on after explaining the permissions (GroupPane).
   }
 
   Future<void> leave() async {
@@ -202,6 +202,11 @@ class MeshService extends ChangeNotifier {
     try {
       if (!await NearbyTransport.ensurePermissions()) {
         problem = 'grp.permission';
+        return;
+      }
+      // Finding nearby phones needs the phone's location setting on (not only the permission).
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        problem = 'grp.location_off';
         return;
       }
       final t = _transportFactory();

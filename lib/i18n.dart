@@ -334,6 +334,33 @@ const Map<String, List<String>> _strings = {
   'grp.sos.dismiss': ['Tutup pemberitahuan', 'Close the alert'],
   'grp.far': ['{name} terpisah ±{m} m darimu', '{name} is about {m} m away from you'],
   'grp.loc.msg': ['Membagikan lokasi', 'Shared a location'],
+  'grp.perm.title': ['Izin untuk Rombongan', 'Permissions for the group'],
+  'grp.perm.lead': [
+    'Supaya HP saling terhubung tanpa internet, Android akan meminta izin berikut. Pilih Izinkan di setiap pertanyaan.',
+    'To connect phones without internet, Android will ask for these permissions. Choose Allow on each one.',
+  ],
+  'grp.perm.loc': [
+    'Lokasi: menemukan HP teman di sekitar dan membagikan posisimu ke rombongan.',
+    'Location: to find teammates\' phones nearby and share your position with the group.',
+  ],
+  'grp.perm.bt': ['Perangkat sekitar (Bluetooth): menghubungkan HP satu rombongan.', 'Nearby devices (Bluetooth): to connect the group\'s phones.'],
+  'grp.perm.wifi': ['Wi-Fi sekitar: mengirim pesan antar-HP lebih cepat dan lebih jauh.', 'Nearby Wi-Fi: to send messages between phones faster and further.'],
+  'grp.perm.notif': [
+    'Notifikasi: pesan, panggilan, dan SOS tetap muncul saat aplikasi tertutup.',
+    'Notifications: messages, calls and SOS still show when the app is closed.',
+  ],
+  'grp.perm.ok': ['Izinkan', 'Allow'],
+  'grp.perm.denied': [
+    'Izin Lokasi atau Perangkat sekitar ditolak. Buka pengaturan aplikasi, pilih Izin, lalu izinkan Lokasi, Perangkat sekitar, dan Notifikasi.',
+    'Location or Nearby devices was refused. Open the app settings, choose Permissions, then allow Location, Nearby devices and Notifications.',
+  ],
+  'grp.perm.settings': ['Buka pengaturan', 'Open settings'],
+  'grp.location_off': [
+    'Lokasi HP sedang mati. Rombongan butuh lokasi menyala untuk menemukan HP teman.',
+    'The phone\'s location is off. The group needs location on to find teammates\' phones.',
+  ],
+  'grp.location.open': ['Nyalakan lokasi', 'Turn on location'],
+  'grp.retry': ['Coba lagi', 'Try again'],
   'grp.loc.send': ['Kirim lokasiku', 'Send my location'],
   'grp.mark': ['Tandai di sini', 'Mark this spot'],
   'grp.mark.lead': [

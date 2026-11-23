@@ -35,20 +35,39 @@ class NearbyTransport implements MeshTransport {
   @override
   Set<String> get connected => _connected;
 
+  /// What Nearby needs: location (to find phones), Bluetooth and nearby Wi-Fi devices.
+  static const needed = [
+    Permission.locationWhenInUse,
+    Permission.bluetoothScan,
+    Permission.bluetoothAdvertise,
+    Permission.bluetoothConnect,
+    Permission.nearbyWifiDevices,
+  ];
+
+  // Permissions that do not exist on this Android version come back as granted or restricted.
+  static bool _ok(PermissionStatus s) => s.isGranted || s.isLimited || s.isRestricted;
+
+  static Future<bool> allGranted() async {
+    for (final p in needed) {
+      if (!_ok(await p.status)) return false;
+    }
+    return true;
+  }
+
+  /// A permission the hiker refused with "don't ask again": only the settings page can fix it.
+  static Future<bool> blocked() async {
+    for (final p in needed) {
+      if ((await p.status).isPermanentlyDenied) return true;
+    }
+    return false;
+  }
+
   /// Asks for what Nearby needs; false when something was refused.
   static Future<bool> ensurePermissions() async {
-    final wanted = [
-      Permission.locationWhenInUse,
-      Permission.bluetoothScan,
-      Permission.bluetoothAdvertise,
-      Permission.bluetoothConnect,
-      Permission.nearbyWifiDevices,
-    ];
-    final result = await wanted.request();
+    final result = await needed.request();
     // The group notification and SOS alerts; the group still works if this is refused.
     await Permission.notification.request();
-    // Permissions that do not exist on this Android version come back as granted or restricted.
-    return result.values.every((s) => s.isGranted || s.isLimited || s.isRestricted);
+    return result.values.every(_ok);
   }
 
   String get _nick => '$_tag:$_self';

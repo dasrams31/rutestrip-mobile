@@ -1,6 +1,8 @@
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:permission_handler/permission_handler.dart' show openAppSettings;
 import 'package:latlong2/latlong.dart' show LatLng;
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
@@ -9,6 +11,7 @@ import '../app_state.dart';
 import '../i18n.dart';
 import '../mesh/mesh_protocol.dart';
 import '../mesh/mesh_service.dart';
+import '../mesh/nearby_transport.dart';
 import '../notify.dart';
 import '../storage.dart';
 import '../theme.dart';
@@ -64,7 +67,10 @@ class _GroupPaneState extends State<GroupPane> {
         ],
       ),
     );
-    if (ok == true) await mesh.create(name.text);
+    if (ok == true) {
+      await mesh.create(name.text);
+      await _ensureRadio();
+    }
   }
 
   Future<void> _join() async {
@@ -123,7 +129,7 @@ class _GroupPaneState extends State<GroupPane> {
         ),
       ),
     );
-    if (ok == true) await mesh.join(code.text, name.text);
+    if (ok == true && await mesh.join(code.text, name.text)) await _ensureRadio();
   }
 
   Future<void> _leave() async {
@@ -203,6 +209,7 @@ class _GroupPaneState extends State<GroupPane> {
     final choice = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
+      isScrollControlled: true, // every action fits on small screens (scrolls when taller)
       builder: (context) => SafeArea(
         child: SingleChildScrollView(
           child: Column(
@@ -341,8 +348,92 @@ class _GroupPaneState extends State<GroupPane> {
   Future<void> _send() async {
     final t = _input.text.trim();
     if (t.isEmpty) return;
+    if (!await _ensureRadio()) return; // the text stays in the box
     _input.clear();
     await mesh.sendChat(t);
+  }
+
+  bool _asking = false;
+
+  /// Turns the radios on, first explaining each permission, and helps when something is
+  /// off (permission refused for good, location setting off). True when the radios run.
+  Future<bool> _ensureRadio() async {
+    if (mesh.running) return true;
+    if (_asking || mesh.starting) return false;
+    _asking = true;
+    try {
+      if (!await NearbyTransport.allGranted()) {
+        if (!mounted) return false;
+        final go = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text(tr(context, 'grp.perm.title')),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(tr(context, 'grp.perm.lead'), style: const TextStyle(height: 1.4)),
+                  const SizedBox(height: 12),
+                  for (final (icon, key) in const [
+                    (Icons.location_on_outlined, 'grp.perm.loc'),
+                    (Icons.bluetooth, 'grp.perm.bt'),
+                    (Icons.wifi_tethering, 'grp.perm.wifi'),
+                    (Icons.notifications_active_outlined, 'grp.perm.notif'),
+                  ])
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(icon, color: RS.z7, size: 22),
+                          const SizedBox(width: 10),
+                          Expanded(child: Text(tr(context, key), style: const TextStyle(height: 1.35))),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr(context, 'chat.cancel'))),
+              FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(tr(context, 'grp.perm.ok'))),
+            ],
+          ),
+        );
+        if (go != true || !mounted) return false;
+      }
+      await mesh.start();
+      if (!mounted) return mesh.running;
+      if (mesh.problem == 'grp.permission' && await NearbyTransport.blocked() && mounted) {
+        final open = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            content: Text(tr(context, 'grp.perm.denied'), style: const TextStyle(height: 1.4)),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr(context, 'chat.cancel'))),
+              FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(tr(context, 'grp.perm.settings'))),
+            ],
+          ),
+        );
+        if (open == true) await openAppSettings();
+      } else if (mesh.problem == 'grp.location_off' && mounted) {
+        final open = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            content: Text(tr(context, 'grp.location_off'), style: const TextStyle(height: 1.4)),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr(context, 'chat.cancel'))),
+              FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(tr(context, 'grp.location.open'))),
+            ],
+          ),
+        );
+        if (open == true) await Geolocator.openLocationSettings();
+      }
+      return mesh.running;
+    } finally {
+      _asking = false;
+    }
   }
 
   @override
@@ -447,7 +538,7 @@ class _GroupPaneState extends State<GroupPane> {
                         ],
                       ),
                     ),
-                    Switch(value: mesh.running, activeThumbColor: RS.z7, onChanged: mesh.starting ? null : (v) => v ? mesh.start() : mesh.stop()),
+                    Switch(value: mesh.running, activeThumbColor: RS.z7, onChanged: mesh.starting ? null : (v) => v ? _ensureRadio() : mesh.stop()),
                     PopupMenuButton<String>(
                       tooltip: tr(context, 'grp.more'),
                       onSelected: (v) {
@@ -481,7 +572,14 @@ class _GroupPaneState extends State<GroupPane> {
                 if (mesh.problem != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
-                    child: Text(tr(context, mesh.problem!), style: const TextStyle(color: RS.err, fontSize: 13)),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(tr(context, mesh.problem!), style: const TextStyle(color: RS.err, fontSize: 13, height: 1.35)),
+                        ),
+                        TextButton(onPressed: mesh.starting ? null : _ensureRadio, child: Text(tr(context, 'grp.retry'))),
+                      ],
+                    ),
                   ),
                 if (others.isNotEmpty) ...[
                   const SizedBox(height: 8),
@@ -565,20 +663,27 @@ class _GroupPaneState extends State<GroupPane> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                _SosButton(active: mesh.mySos, enabled: mesh.running, onFire: () => mesh.setSos(!mesh.mySos)),
+                _SosButton(
+                  active: mesh.mySos,
+                  enabled: true,
+                  onFire: () async {
+                    if (await _ensureRadio()) await mesh.setSos(!mesh.mySos);
+                  },
+                ),
                 SizedBox(
                   width: 48,
                   height: 52,
                   child: IconButton(
                     tooltip: tr(context, 'grp.actions'),
-                    onPressed: mesh.running ? _actions : null,
+                    onPressed: () async {
+                      if (await _ensureRadio()) await _actions();
+                    },
                     icon: const Icon(Icons.add_circle_outline, color: RS.z7),
                   ),
                 ),
                 Expanded(
                   child: TextField(
                     controller: _input,
-                    enabled: mesh.running,
                     minLines: 1,
                     maxLines: 4,
                     maxLength: MeshProtocol.maxTextLength,
@@ -597,7 +702,7 @@ class _GroupPaneState extends State<GroupPane> {
                       foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     ),
-                    onPressed: mesh.running ? _send : null,
+                    onPressed: _send,
                     icon: const Icon(Icons.send),
                   ),
                 ),
