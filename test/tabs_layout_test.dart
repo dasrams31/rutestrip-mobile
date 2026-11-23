@@ -66,7 +66,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull, reason: 'slide ${i + 2}');
       }
-      expect(find.text(lang == 'en' ? 'Get going' : 'Mulai'), findsOneWidget);
+      expect(find.text(lang == 'en' ? 'Start' : 'Mulai'), findsOneWidget);
     });
 
     testWidgets('settings, history and about ($lang)', (tester) async {

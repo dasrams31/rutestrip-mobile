@@ -113,6 +113,44 @@ class _HomeScreenState extends State<HomeScreen> {
                       ],
                     ),
                   ),
+                  // Example searches right under the box: one tap searches.
+                  const SizedBox(height: 14),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: Text(
+                      tr(context, 'search.examples'),
+                      style: const TextStyle(color: Color(0xFFD1FAE5), fontSize: 14, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  FutureBuilder<Filters>(
+                    future: _filters,
+                    builder: (context, snap) {
+                      final examples = (snap.data?.examples.isNotEmpty ?? false) ? snap.data!.examples : fallbackExamples;
+                      return SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        clipBehavior: Clip.none,
+                        child: Row(
+                          children: [
+                            for (final e in examples)
+                              Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: OutlinedButton(
+                                  onPressed: () => _search(e),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: Colors.white,
+                                    side: const BorderSide(color: Color(0x66FFFFFF)),
+                                    minimumSize: const Size(0, 44),
+                                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                                  ),
+                                  child: Text(e, style: const TextStyle(fontWeight: FontWeight.w600)),
+                                ),
+                              ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
                 ],
               ),
             ),
@@ -120,29 +158,11 @@ class _HomeScreenState extends State<HomeScreen> {
           FutureBuilder<Filters>(
             future: _filters,
             builder: (context, snap) {
-              final examples = snap.data?.examples ?? fallbackExamples;
               return Padding(
-                padding: pageGutter(context, top: 24, bottom: 32, min: 20),
+                padding: pageGutter(context, top: 8, bottom: 32, min: 20),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      tr(context, 'search.examples'),
-                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: RS.ink),
-                    ),
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        for (final e in examples)
-                          OutlinedButton(
-                            onPressed: () => _search(e),
-                            style: OutlinedButton.styleFrom(backgroundColor: Colors.white),
-                            child: Text(e),
-                          ),
-                      ],
-                    ),
                     _RecentSearches(future: _dash, onSearch: _search),
                     const SizedBox(height: 28),
                     _BrowseCard(filters: snap.data, loading: snap.connectionState == ConnectionState.waiting),
