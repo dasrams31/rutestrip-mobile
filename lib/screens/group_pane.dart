@@ -575,7 +575,10 @@ class _GroupPaneState extends State<GroupPane> {
                     child: Row(
                       children: [
                         Expanded(
-                          child: Text(tr(context, mesh.problem!), style: const TextStyle(color: RS.err, fontSize: 13, height: 1.35)),
+                          child: Text(
+                            mesh.problemDetail == null ? tr(context, mesh.problem!) : '${tr(context, mesh.problem!)} (${mesh.problemDetail})',
+                            style: const TextStyle(color: RS.err, fontSize: 13, height: 1.35),
+                          ),
                         ),
                         TextButton(onPressed: mesh.starting ? null : _ensureRadio, child: Text(tr(context, 'grp.retry'))),
                       ],

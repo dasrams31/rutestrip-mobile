@@ -10,6 +10,8 @@ import 'package:path_provider/path_provider.dart';
 
 import 'package:battery_plus/battery_plus.dart';
 
+import 'package:permission_handler/permission_handler.dart' as ph;
+
 import '../i18n.dart';
 import '../location_hub.dart';
 import '../notify.dart';
@@ -68,7 +70,10 @@ class MeshService extends ChangeNotifier {
   StreamSubscription<Position>? _posSub;
   String _name = 'Pendaki';
   bool loaded = false, running = false, starting = false;
-  String? problem; // i18n key
+  String? problem;
+
+  /// The radio's own error text, shown under [problem] when starting fails.
+  String? problemDetail; // i18n key
   final members = <String, MeshMember>{};
   final chat = <MeshMessage>[];
   int peers = 0;
@@ -198,6 +203,7 @@ class MeshService extends ChangeNotifier {
     if (g == null || id == null || running || starting) return;
     starting = true;
     problem = null;
+    problemDetail = null;
     notifyListeners();
     try {
       if (!await NearbyTransport.ensurePermissions()) {
@@ -209,6 +215,13 @@ class MeshService extends ChangeNotifier {
         problem = 'grp.location_off';
         return;
       }
+      // Nearby cannot turn Bluetooth on by itself on recent Android versions.
+      try {
+        if (await ph.Permission.bluetooth.serviceStatus == ph.ServiceStatus.disabled) {
+          problem = 'grp.bt_off';
+          return;
+        }
+      } catch (_) {}
       final t = _transportFactory();
       final node = MeshNode(codec: MeshCodec(g, id), transport: t, name: _name);
       _msgSub = node.messages.listen(_onMessage);
@@ -224,7 +237,10 @@ class MeshService extends ChangeNotifier {
       _startPositions();
     } catch (e) {
       if (kDebugMode) debugPrint('RuteStrip mesh start failed: $e');
+      // Show the radio's own reason (e.g. a Nearby status code) to help on a real phone.
       problem = 'grp.radio';
+      problemDetail = e is PlatformException ? (e.message ?? e.code) : '$e';
+      if (problemDetail!.length > 160) problemDetail = problemDetail!.substring(0, 160);
       await _teardown();
     } finally {
       starting = false;
@@ -421,7 +437,7 @@ class MeshService extends ChangeNotifier {
 
   Future<Position?> _currentPosition() async {
     try {
-      return await Geolocator.getLastKnownPosition(forceAndroidLocationManager: true);
+      return await Geolocator.getLastKnownPosition() ?? await Geolocator.getCurrentPosition(locationSettings: LocationHub.instance.oneShot());
     } catch (_) {
       return null;
     }

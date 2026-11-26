@@ -149,9 +149,10 @@ class _MapScreenState extends State<MapScreen> {
     super.dispose();
   }
 
-  /// Only when location is already allowed: opening a map never pops a permission prompt.
+  /// Your position on the trail map: asks for location once if it was never answered.
   Future<void> _startGps() async {
-    final p = await Geolocator.checkPermission();
+    var p = await Geolocator.checkPermission();
+    if (p == LocationPermission.denied) p = await Geolocator.requestPermission();
     if (!(p == LocationPermission.always || p == LocationPermission.whileInUse)) return;
     if (!mounted) return;
     _gps = LocationHub.instance.positions.listen((pos) {

@@ -168,19 +168,67 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
       await _compass?.cancel();
       _compass = null;
     }
-    if (onScreen && _status == _Status.idle && !_previewOn) {
-      final p = await Geolocator.checkPermission();
-      if (!(p == LocationPermission.always || p == LocationPermission.whileInUse)) return;
-      if (!await Geolocator.isLocationServiceEnabled()) return;
-      // Things may have changed during the awaits: only start if still wanted and not started.
-      if (!mounted || !widget.active || !_appVisible || _status != _Status.idle || _previewOn) return;
-      _previewOn = true;
-      _listen();
-      LocationHub.instance.require(_previewKey, LocNeed.preview);
-    } else if ((!onScreen || _status != _Status.idle) && _previewOn) {
+    // The preview follows the tab, not app pauses: a system dialog (location accuracy,
+    // permission) pauses the app, and restarting the stream then would ask again.
+    final previewWanted = widget.active;
+    if (previewWanted && _status == _Status.idle && !_previewOn) {
+      if (_checkingPreview) return;
+      _checkingPreview = true;
+      try {
+        if (!await _previewAllowed()) return;
+        // Things may have changed during the awaits: only start if still wanted and not started.
+        if (!mounted || !widget.active || _status != _Status.idle || _previewOn) return;
+        _previewOn = true;
+        _listen();
+        LocationHub.instance.require(_previewKey, LocNeed.preview);
+        _seedPosition();
+      } finally {
+        _checkingPreview = false;
+      }
+    } else if ((!previewWanted || _status != _Status.idle) && _previewOn) {
       _previewOn = false;
       LocationHub.instance.release(_previewKey);
     }
+  }
+
+  bool _checkingPreview = false, _askedOnce = false;
+
+  /// Location on and allowed for the map preview. Asks for the permission the first time
+  /// the tab is opened (once per app start) and says what is missing otherwise.
+  Future<bool> _previewAllowed() async {
+    if (!await Geolocator.isLocationServiceEnabled()) {
+      if (mounted) setState(() => _problem = 'record.service_off');
+      return false;
+    }
+    var p = await Geolocator.checkPermission();
+    if (p == LocationPermission.denied && !_askedOnce) {
+      _askedOnce = true;
+      p = await Geolocator.requestPermission();
+    }
+    if (!mounted) return false;
+    if (p == LocationPermission.always || p == LocationPermission.whileInUse) {
+      if (_problem == 'record.service_off' || _problem == 'record.permission' || _problem == 'record.permission.forever') {
+        setState(() {
+          _problem = null;
+          _problemForever = false;
+        });
+      }
+      return true;
+    }
+    setState(() {
+      _problem = p == LocationPermission.deniedForever ? 'record.permission.forever' : 'record.permission';
+      _problemForever = p == LocationPermission.deniedForever;
+    });
+    return false;
+  }
+
+  /// Shows a position right away: the phone's last known one, then a fresh fix, so the map
+  /// jumps to the hiker without waiting for the stream's first update.
+  Future<void> _seedPosition() async {
+    try {
+      final last = await Geolocator.getLastKnownPosition();
+      if (last != null && mounted && _last == null) _onPreview(last);
+    } catch (_) {}
   }
 
   /// One subscription to the app's GPS stream; what a fix means depends on the state.
@@ -333,6 +381,9 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
       return false;
     }
     // "Approximate location" (Android 12+) is 1-3 km: every fix would be thrown away.
+    // Asking again shows Android's "Change to precise location" dialog.
+    if (await Geolocator.getLocationAccuracy() == LocationAccuracyStatus.reduced) await Geolocator.requestPermission();
+    if (!mounted) return false;
     if (await Geolocator.getLocationAccuracy() == LocationAccuracyStatus.reduced) {
       setState(() {
         _problem = 'record.precise';
@@ -1158,6 +1209,15 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
                       child: Text(tr(context, _problem!), style: const TextStyle(color: Color(0xFF7F1D1D), fontSize: 14)),
                     ),
                     if (_problemForever) TextButton(onPressed: Geolocator.openAppSettings, child: Text(tr(context, 'record.settings'))),
+                    if (_problem == 'record.service_off') TextButton(onPressed: Geolocator.openLocationSettings, child: Text(tr(context, 'grp.location.open'))),
+                    if (_problem == 'record.permission')
+                      TextButton(
+                        onPressed: () async {
+                          _askedOnce = false;
+                          await _syncSensors();
+                        },
+                        child: Text(tr(context, 'grp.retry')),
+                      ),
                   ],
                 ),
                 const SizedBox(height: 8),

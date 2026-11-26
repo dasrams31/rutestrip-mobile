@@ -364,6 +364,10 @@ const Map<String, List<String>> _strings = {
   ],
   'grp.location.open': ['Nyalakan lokasi', 'Turn on location'],
   'grp.retry': ['Coba lagi', 'Try again'],
+  'grp.bt_off': [
+    'Bluetooth HP sedang mati. Nyalakan Bluetooth dan Wi-Fi dari panel cepat, lalu ketuk Coba lagi.',
+    'Bluetooth is off. Turn on Bluetooth and Wi-Fi from the quick settings, then tap Try again.',
+  ],
   'grp.loc.send': ['Kirim lokasiku', 'Send my location'],
   'grp.mark': ['Tandai di sini', 'Mark this spot'],
   'grp.mark.lead': [

@@ -26,6 +26,10 @@ class LocationHub {
   String lang = 'id';
   String groupName = '';
 
+  /// The GPS chip (LocationManager) instead of the fused provider, after the hiker declined
+  /// Google's "Location Accuracy" dialog (the fused provider would ask again each time).
+  bool _useManager = false;
+
   /// Positions (and stream errors) for every listener.
   Stream<Position> get positions => _out.stream;
 
@@ -55,14 +59,29 @@ class LocationHub {
     _sub = null;
     _active = top;
     if (top == null) return;
-    _sub = Geolocator.getPositionStream(locationSettings: _settings(top)).listen(_out.add, onError: (Object e) => _out.addError(e));
+    _sub = Geolocator.getPositionStream(locationSettings: _settings(top)).listen(_out.add, onError: _onError);
   }
+
+  Future<void> _onError(Object e) async {
+    // Declined "Location Accuracy" while location is on: go on with the GPS chip, quietly.
+    if (e is LocationServiceDisabledException && !_useManager && await Geolocator.isLocationServiceEnabled()) {
+      _useManager = true;
+      refresh();
+      return;
+    }
+    _out.addError(e);
+  }
+
+  /// Settings for a one-time position lookup that follow the same provider choice.
+  AndroidSettings oneShot({Duration timeLimit = const Duration(seconds: 15)}) =>
+      AndroidSettings(accuracy: LocationAccuracy.high, forceLocationManager: _useManager, timeLimit: timeLimit);
 
   AndroidSettings _settings(LocNeed need) => switch (need) {
     LocNeed.record => AndroidSettings(
       accuracy: LocationAccuracy.best,
-      // GPS chip directly: works in the mountains without mobile data or Play services.
-      forceLocationManager: true,
+      // Fused provider: uses the GPS chip in the mountains and Wi-Fi/cell indoors, so the first
+      // fix comes fast. Without Play services geolocator falls back to the GPS chip itself.
+      forceLocationManager: _useManager,
       distanceFilter: 5,
       intervalDuration: const Duration(seconds: 3),
       foregroundNotificationConfig: ForegroundNotificationConfig(
@@ -75,7 +94,7 @@ class LocationHub {
     ),
     LocNeed.group => AndroidSettings(
       accuracy: LocationAccuracy.high,
-      forceLocationManager: true,
+      forceLocationManager: _useManager,
       distanceFilter: 10,
       intervalDuration: const Duration(seconds: 10),
       foregroundNotificationConfig: ForegroundNotificationConfig(
@@ -88,7 +107,7 @@ class LocationHub {
     ),
     LocNeed.share => AndroidSettings(
       accuracy: LocationAccuracy.high,
-      forceLocationManager: true,
+      forceLocationManager: _useManager,
       distanceFilter: 15,
       intervalDuration: const Duration(seconds: 30),
       foregroundNotificationConfig: ForegroundNotificationConfig(
@@ -101,7 +120,7 @@ class LocationHub {
     ),
     LocNeed.preview => AndroidSettings(
       accuracy: LocationAccuracy.high,
-      forceLocationManager: true,
+      forceLocationManager: _useManager,
       distanceFilter: 10,
       intervalDuration: const Duration(seconds: 5),
     ),
