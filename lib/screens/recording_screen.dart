@@ -12,6 +12,7 @@ import '../widgets/contour_header.dart';
 import '../widgets/elevation_chart.dart';
 import '../widgets/gpx_actions.dart';
 import '../widgets/trail_map.dart';
+import 'compose_screen.dart';
 import 'record_screen.dart';
 import 'replay_screen.dart';
 import 'upload_screen.dart';
@@ -242,6 +243,13 @@ class _RecordingScreenState extends State<RecordingScreen> {
                       label: Text(tr(context, 'gpx.follow')),
                     ),
                     FilledButton.icon(onPressed: _share, icon: const Icon(Icons.share), label: Text(tr(context, 'rec.share'))),
+                    if (r.points.length >= 2)
+                      OutlinedButton.icon(
+                        onPressed: () => shareRecordingToFeed(context, r),
+                        style: OutlinedButton.styleFrom(backgroundColor: Colors.white),
+                        icon: const Icon(Icons.dynamic_feed_outlined, color: RS.z7),
+                        label: Text(tr(context, 'post.share_recording')),
+                      ),
                     if (r.points.length >= 2)
                       OutlinedButton.icon(
                         onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ReplayScreen(recording: r))),

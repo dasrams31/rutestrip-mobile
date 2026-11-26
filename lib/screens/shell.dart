@@ -3,18 +3,19 @@ import 'package:material_ui/material_ui.dart';
 import '../i18n.dart';
 import '../app_state.dart';
 import '../mesh/mesh_service.dart';
+import '../outbox.dart';
 import '../storage.dart';
 import 'group_pane.dart';
 import '../theme.dart';
 import 'account_screen.dart';
 import 'chat_screen.dart';
+import 'feed_screen.dart';
 import 'home_screen.dart';
 import 'record_screen.dart';
-import 'routes_screen.dart';
 
-/// Tab indexes, used when another screen opens a tab.
+/// Tab indexes, used when another screen opens a tab. The trail list is a page opened from Cari.
 class Tabs {
-  static const search = 0, routes = 1, chat = 2, record = 3, me = 4;
+  static const search = 0, feed = 1, chat = 2, record = 3, me = 4;
 }
 
 /// Signed-in app: the bottom bar of the website's PWA (five items, active one marked
@@ -40,11 +41,20 @@ class ShellState extends State<Shell> {
       if (!mounted) return;
       mesh.load(AppScope.read(context).user?.name ?? 'Pendaki');
       syncMeshName(context);
+      // Posts written without signal go out from here on.
+      final state = AppScope.read(context);
+      if (state.user != null) Outbox.instance.start(state.api, state.user!.id);
     });
     // A recording that was cut off (app closed, phone restarted) opens Rekam so it can be resumed.
     RecordingStore.loadDraft().then((d) {
       if (d != null && mounted) open(Tabs.record);
     });
+  }
+
+  @override
+  void dispose() {
+    Outbox.instance.stop();
+    super.dispose();
   }
 
   /// Jump to a tab from anywhere (for example "Rekam" from a route page).
@@ -68,7 +78,7 @@ class ShellState extends State<Shell> {
           index: _index,
           children: [
             lazy(Tabs.search, () => const HomeScreen()),
-            lazy(Tabs.routes, () => const RoutesScreen()),
+            lazy(Tabs.feed, () => FeedScreen(active: _index == Tabs.feed)),
             lazy(Tabs.chat, () => ChatScreen(active: _index == Tabs.chat)),
             lazy(Tabs.record, () => RecordScreen(active: _index == Tabs.record)),
             lazy(Tabs.me, () => AccountScreen(active: _index == Tabs.me)),
@@ -90,7 +100,7 @@ class _TabBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final items = [
       (Icons.search, 'tab.search', false),
-      (Icons.map_outlined, 'tab.routes', false),
+      (Icons.dynamic_feed_outlined, 'tab.feed', false),
       (Icons.chat_bubble_outline, 'tab.chat', true),
       (Icons.radio_button_checked, 'tab.record', false),
       (Icons.person_outline, 'tab.me', false),

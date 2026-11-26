@@ -51,7 +51,7 @@ void main() {
   for (final lang in ['id', 'en']) {
     testWidgets('shell with bottom tabs ($lang)', (tester) async {
       await pump(tester, Shell(key: GlobalKey()), lang);
-      final labels = lang == 'en' ? ['Trails', 'Chat', 'Record', 'Me'] : ['Jalur', 'Chat', 'Rekam', 'Saya'];
+      final labels = lang == 'en' ? ['Feed', 'Chat', 'Record', 'Me'] : ['Linimasa', 'Chat', 'Rekam', 'Saya'];
       for (final label in labels) {
         await tester.tap(find.text(label).last);
         await tester.pump();

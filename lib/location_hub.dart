@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:geolocator/geolocator.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'i18n.dart';
 
@@ -28,7 +29,16 @@ class LocationHub {
 
   /// The GPS chip (LocationManager) instead of the fused provider, after the hiker declined
   /// Google's "Location Accuracy" dialog (the fused provider would ask again each time).
+  /// Remembered on the phone, so the dialog is not shown again on every app start.
   bool _useManager = false;
+  static const _prefKey = 'loc_use_manager';
+
+  /// Reads the remembered provider choice; call once at app start.
+  Future<void> load() async {
+    try {
+      _useManager = (await SharedPreferences.getInstance()).getBool(_prefKey) ?? false;
+    } catch (_) {}
+  }
 
   /// Positions (and stream errors) for every listener.
   Stream<Position> get positions => _out.stream;
@@ -66,6 +76,7 @@ class LocationHub {
     // Declined "Location Accuracy" while location is on: go on with the GPS chip, quietly.
     if (e is LocationServiceDisabledException && !_useManager && await Geolocator.isLocationServiceEnabled()) {
       _useManager = true;
+      SharedPreferences.getInstance().then((p) => p.setBool(_prefKey, true)).ignore();
       refresh();
       return;
     }

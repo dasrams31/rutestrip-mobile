@@ -22,6 +22,7 @@ import '../widgets/contour_header.dart';
 import '../widgets/gpx_actions.dart';
 import '../widgets/trail_map.dart';
 import '../mesh/mesh_service.dart';
+import 'compose_screen.dart';
 import 'photo_stamp_screen.dart';
 import 'live_share_sheet.dart';
 import '../live_share.dart';
@@ -601,7 +602,16 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
     _saveDraft();
     final label = tr(context, 'wpt.$kind');
     if (mesh.running) mesh.shareSpot(label, p.latitude, p.longitude, kind: kind); // the group sees it too
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr(context, 'wpt.added', {'name': label}))));
+    final spot = Place(lat: p.latitude, lng: p.longitude, label: label);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(tr(context, 'wpt.added', {'name': label})),
+        action: SnackBarAction(
+          label: tr(context, 'post.share_spot'),
+          onPressed: () => shareToFeed(context, place: spot),
+        ),
+      ),
+    );
   }
 
   /// A photo with the hike info drawn on it (place, height, time, distance so far).
@@ -882,19 +892,19 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
         children: [
           ContourHeader(
             seed: 55,
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+            padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const HeaderBar(),
-                Text(tr(context, 'record.title').toUpperCase(), style: RS.head(32, color: Colors.white)),
-                const SizedBox(height: 2),
-                Text(
-                  follow != null ? tr(context, 'record.following', {'name': follow.name}) : tr(context, 'record.lead'),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Color(0xFFD1FAE5), fontSize: 14, height: 1.35),
-                ),
+                Text(tr(context, 'record.title').toUpperCase(), style: RS.head(26, color: Colors.white)),
+                if (follow != null)
+                  Text(
+                    tr(context, 'record.following', {'name': follow.name}),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Color(0xFFD1FAE5), fontSize: 13),
+                  ),
               ],
             ),
           ),
@@ -1182,9 +1192,9 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
           border: Border(top: BorderSide(color: RS.line)),
         ),
         // Large text sizes: the panel scrolls instead of pushing the buttons off screen.
-        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.5),
+        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.42),
         child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+          padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,
@@ -1238,55 +1248,61 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
                   ),
                 ],
               ),
-              const SizedBox(height: 4),
-              Text(status, style: const TextStyle(fontSize: 12.5, color: RS.muted, height: 1.35)),
+              const SizedBox(height: 2),
+              Text(
+                [
+                  status,
+                  if (_heading != null) tr(context, 'record.facing', {'dir': _dir(_heading!), 'deg': _heading!.round() % 360}),
+                ].join(' · '),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12, color: RS.muted, height: 1.3),
+              ),
               for (final m in mesh.members.values)
                 if (m.id != mesh.myId && (mesh.distanceTo(m) ?? 0) > MeshService.separatedM)
                   Text(
                     tr(context, 'grp.far', {'name': m.name, 'm': fmtNum(context, mesh.distanceTo(m))}),
                     style: const TextStyle(fontSize: 13, color: RS.warnInk, fontWeight: FontWeight.w700),
                   ),
-              if (_heading != null)
-                Text(
-                  tr(context, 'record.facing', {'dir': _dir(_heading!), 'deg': _heading!.round() % 360}),
-                  style: const TextStyle(fontSize: 12.5, color: RS.muted),
-                ),
-              const SizedBox(height: 8),
-              if (_last != null)
-                Wrap(
-                  spacing: 16,
+              const SizedBox(height: 6),
+              // One row of small actions; it scrolls sideways when the screen is narrow.
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
                   children: [
-                    if (_status != _Status.idle)
-                      TextButton.icon(
-                        style: TextButton.styleFrom(padding: EdgeInsets.zero),
-                        onPressed: _mark,
-                        icon: const Icon(Icons.add_location_alt_outlined),
-                        label: Text('${tr(context, 'wpt.mark')}${_waypoints.isEmpty ? '' : ' (${_waypoints.length})'}'),
+                    if (_last != null && _status != _Status.idle)
+                      _Action(
+                        icon: Icons.add_location_alt_outlined,
+                        label: '${tr(context, 'wpt.mark')}${_waypoints.isEmpty ? '' : ' (${_waypoints.length})'}',
+                        onTap: _mark,
                       ),
-                    ListenableBuilder(
-                      listenable: LiveShare.instance,
-                      builder: (context, _) => TextButton.icon(
-                        style: TextButton.styleFrom(padding: EdgeInsets.zero),
-                        onPressed: () => showLiveShareSheet(context),
-                        icon: Icon(LiveShare.instance.active ? Icons.share_location : Icons.share_location_outlined),
-                        label: Text(tr(context, LiveShare.instance.active ? 'live.on' : 'live.button')),
+                    if (_last != null)
+                      ListenableBuilder(
+                        listenable: LiveShare.instance,
+                        builder: (context, _) => _Action(
+                          icon: LiveShare.instance.active ? Icons.share_location : Icons.share_location_outlined,
+                          label: tr(context, LiveShare.instance.active ? 'live.on' : 'live.button'),
+                          on: LiveShare.instance.active,
+                          onTap: () => showLiveShareSheet(context),
+                        ),
                       ),
-                    ),
-                    TextButton.icon(
-                      style: TextButton.styleFrom(padding: EdgeInsets.zero),
-                      onPressed: _photo,
-                      icon: const Icon(Icons.photo_camera_outlined),
-                      label: Text(tr(context, 'stamp.button')),
-                    ),
-                    if (_status != _Status.idle)
-                      TextButton.icon(
-                        style: TextButton.styleFrom(padding: EdgeInsets.zero),
-                        onPressed: _cut,
-                        icon: const Icon(Icons.content_cut),
-                        label: Text(tr(context, 'record.cut')),
+                    if (_last != null) _Action(icon: Icons.photo_camera_outlined, label: tr(context, 'stamp.button'), onTap: _photo),
+                    if (_last != null && _status != _Status.idle) _Action(icon: Icons.content_cut, label: tr(context, 'record.cut'), onTap: _cut),
+                    if (_status == _Status.idle)
+                      _Action(
+                        icon: Icons.file_open_outlined,
+                        label: tr(context, 'gpx.import.follow'),
+                        onTap: () async {
+                          final r = await importGpx(context);
+                          if (r != null && context.mounted) followInRecord(context, r);
+                        },
                       ),
+                    if (followRoute.value != null && _status == _Status.idle)
+                      _Action(icon: Icons.close, label: tr(context, 'chat.cancel'), onTap: () => followRoute.value = null),
                   ],
                 ),
+              ),
+              const SizedBox(height: 6),
               switch (_status) {
                 _Status.idle => SignButton(label: tr(context, 'record.start'), onPressed: _start),
                 _Status.recording => Row(
@@ -1312,20 +1328,6 @@ class _RecordScreenState extends State<RecordScreen> with WidgetsBindingObserver
                   ],
                 ),
               },
-              if (_status == _Status.idle)
-                TextButton.icon(
-                  onPressed: () async {
-                    final r = await importGpx(context);
-                    if (r != null && context.mounted) followInRecord(context, r);
-                  },
-                  icon: const Icon(Icons.file_open_outlined),
-                  label: Text(tr(context, 'gpx.import.follow')),
-                ),
-              if (followRoute.value != null && _status == _Status.idle)
-                TextButton(
-                  onPressed: () => followRoute.value = null,
-                  child: Text('${tr(context, 'chat.cancel')}: ${followRoute.value!.name}', maxLines: 1, overflow: TextOverflow.ellipsis),
-                ),
             ],
           ),
         ),
@@ -1428,12 +1430,55 @@ class _Num extends StatelessWidget {
           alignment: Alignment.centerLeft,
           child: Text(
             value,
-            style: RS.head(24, color: RS.z9, weight: FontWeight.w700),
+            style: RS.head(21, color: RS.z9, weight: FontWeight.w700),
           ),
         ),
       ],
     );
   }
+}
+
+/// Small pill action under the numbers (mark, share, photo, cut, follow a GPX).
+class _Action extends StatelessWidget {
+  const _Action({required this.icon, required this.label, required this.onTap, this.on = false});
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool on;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(right: 6),
+    child: Material(
+      color: on ? const Color(0xFFECFDF5) : Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: BorderSide(color: on ? RS.z7 : RS.line),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: onTap,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 40),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 18, color: RS.z7),
+                const SizedBox(width: 6),
+                Text(
+                  label,
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: RS.z9),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 /// A teammate from the offline group: initial in a circle, first name under it.

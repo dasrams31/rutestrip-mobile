@@ -8,7 +8,6 @@ import '../widgets/common.dart';
 import '../widgets/contour_header.dart';
 import 'results_screen.dart';
 import 'routes_screen.dart';
-import 'shell.dart';
 
 /// Search by sentence: the one focal point is the search box and its yellow button.
 class HomeScreen extends StatefulWidget {
@@ -190,7 +189,7 @@ class _BrowseCard extends StatelessWidget {
     return Card(
       child: InkWell(
         borderRadius: BorderRadius.circular(10),
-        onTap: () => Shell.globalKey.currentState?.open(Tabs.routes),
+        onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RoutesScreen())),
         child: Padding(
           padding: const EdgeInsets.all(18),
           child: Row(
@@ -263,7 +262,7 @@ class _RecentSearches extends StatelessWidget {
   }
 }
 
-/// Mountains with the most trails (counts from the server); opens Jalur filtered.
+/// Mountains with the most trails (counts from the server); opens the trail list filtered.
 class _Mountains extends StatelessWidget {
   const _Mountains({required this.filters});
 
@@ -291,7 +290,7 @@ class _Mountains extends StatelessWidget {
                   label: Text('${m.name.replaceFirst('Gunung ', '')} · ${m.count}'),
                   onPressed: () {
                     routesFilter.value = m.name;
-                    Shell.globalKey.currentState?.open(Tabs.routes);
+                    Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RoutesScreen()));
                   },
                 ),
             ],

@@ -21,6 +21,7 @@ final rootNavigator = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await LocationHub.instance.load();
   Api.checkBaseUrl();
   final state = AppState(Api())
     ..onSignedOut = () {

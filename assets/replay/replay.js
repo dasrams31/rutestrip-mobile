@@ -1,6 +1,7 @@
 // RuteStrip 3D replay: flies a camera along a saved recording over terrain.
 // The app calls replayStart(jsonString) once after load and replayControl(cmd, arg)
-// for play, pause, speed and restart. Messages back go through the RS channel.
+// for play, pause, speed and restart; replayExport(cmd, json) records the replay as a video.
+// Messages back go through the RS channel.
 (function () {
   'use strict';
 
@@ -35,6 +36,7 @@
     if (failed) return;
     failed = true;
     playing = false;
+    exportAbort(null);
     post('error:' + kind);
   }
 
@@ -92,7 +94,7 @@
   }
 
   // A card under the HUD (text only, never HTML) while the replay passes a marked point.
-  var calloutTimer = null;
+  var calloutTimer = null, shownCallout = null;
   function callout(w) {
     var box = document.getElementById('callout');
     box.textContent = '';
@@ -110,6 +112,7 @@
       box.appendChild(m);
     }
     box.hidden = false;
+    shownCallout = { w: w, until: performance.now() + 4500 };
     map.getSource('wpts').setData(wptData());
     clearTimeout(calloutTimer);
     calloutTimer = setTimeout(function () {
@@ -118,10 +121,11 @@
   }
 
   function render(now) {
-    var dt = lastFrame ? Math.min(0.1, (now - lastFrame) / 1000) : 0;
+    // While exporting, slow frames take bigger steps so the video keeps its length.
+    var dt = lastFrame ? Math.min(rec && rec.phase === 'fly' ? 0.3 : 0.1, (now - lastFrame) / 1000) : 0;
     lastFrame = now;
     if (playing) {
-      s = Math.min(total, s + dt * mPerSec * speed);
+      s = Math.min(total, s + dt * (rec && rec.phase === 'fly' ? rec.rate : mPerSec * speed));
       for (var i = 0; i < wpts.length; i++) {
         if (!wpts[i].shown && s >= wpts[i].d) {
           wpts[i].shown = true;
@@ -153,6 +157,8 @@
     if (playing && s >= total) {
       playing = false;
       post('ended');
+      // Hold the last view for a moment, then the end card.
+      if (rec && rec.phase === 'fly') setTimeout(exportEndCard, 500);
     }
     if (!failed) requestAnimationFrame(render);
   }
@@ -301,6 +307,7 @@
       if (!tilesOk) fail('tiles');
     }, 20000);
 
+    map.on('render', compose);
     map.once('load', function () {
       post('ready');
       requestAnimationFrame(render);
@@ -316,6 +323,488 @@
       setTimeout(go, 4000);
     });
   }
+
+  // ---- Video export ----
+  // The replay is flown once from start to end at a fixed pace. Every map frame is drawn onto
+  // an offscreen 2D canvas (at most 720 x 1280) together with the HUD, the map credit and the
+  // RuteStrip mark, then an end card; MediaRecorder records that canvas. The file goes to the
+  // app in base64 chunks, one per replayExport('next') call, so memory stays flat.
+
+  var MIMES = ['video/mp4;codecs=avc1', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  var CHUNK = 512 * 1024;
+  var END_SECS = 1.5;
+  var rec = null;
+
+  function pickMime() {
+    if (!window.MediaRecorder || typeof MediaRecorder.isTypeSupported !== 'function') return null;
+    for (var i = 0; i < MIMES.length; i++) {
+      if (MediaRecorder.isTypeSupported(MIMES[i])) return MIMES[i];
+    }
+    return null;
+  }
+
+  function even(v) {
+    return Math.max(2, Math.round(v / 2) * 2);
+  }
+
+  function plate(g, x, y, w, h, r) {
+    g.beginPath();
+    g.moveTo(x + r, y);
+    g.arcTo(x + w, y, x + w, y + h, r);
+    g.arcTo(x + w, y + h, x, y + h, r);
+    g.arcTo(x, y + h, x, y, r);
+    g.arcTo(x, y, x + w, y, r);
+    g.closePath();
+    g.fill();
+  }
+
+  function font(weight, px, display) {
+    return weight + ' ' + Math.round(px) + 'px ' + (display ? '"Barlow Condensed", sans-serif' : 'Inter, sans-serif');
+  }
+
+  // Text cut with an ellipsis to fit maxW.
+  function fit(g, text, maxW) {
+    if (g.measureText(text).width <= maxW) return text;
+    var t = text;
+    while (t.length > 1 && g.measureText(t + '…').width > maxW) t = t.slice(0, -1);
+    return t + '…';
+  }
+
+  function drawHud(g, r, p) {
+    var u = r.u, x = 10 * u, y = 10 * u, w = r.W - 20 * u, pad = 12 * u;
+    var cells = [];
+    if (data.hasTime && p[2] != null) cells.push([data.labels.time, hm(p[2]), '']);
+    cells.push([data.labels.dist, nf2.format(s / 1000), ' km']);
+    cells.push([data.labels.gain, nf0.format(p[3]), ' m']);
+    var h = (r.title ? 27 : 0) * u + 62 * u;
+    g.fillStyle = 'rgba(5, 59, 48, 0.88)';
+    plate(g, x, y, w, h, 10 * u);
+    g.textBaseline = 'top';
+    var cy = y + 9 * u;
+    if (r.title) {
+      g.font = font(800, 21 * u, true);
+      g.fillStyle = '#ffffff';
+      g.fillText(fit(g, r.title.toUpperCase(), w - 2 * pad), x + pad, cy);
+      cy += 27 * u;
+    }
+    var cw = (w - 2 * pad) / cells.length;
+    for (var i = 0; i < cells.length; i++) {
+      var c = cells[i], cx = x + pad + i * cw;
+      g.font = font(600, 11 * u);
+      g.fillStyle = '#a7f3d0';
+      g.fillText(fit(g, String(c[0]).toUpperCase(), cw - 6 * u), cx, cy);
+      g.font = font(800, 30 * u, true);
+      g.fillStyle = '#ffffff';
+      g.fillText(c[1], cx, cy + 16 * u);
+      if (c[2]) {
+        var vw = g.measureText(c[1]).width;
+        g.font = font(800, 16 * u, true);
+        g.fillText(c[2], cx + vw, cy + 28 * u);
+      }
+    }
+    return y + h;
+  }
+
+  function drawCallout(g, r, top, now) {
+    var c = shownCallout;
+    if (!c || now > c.until) return;
+    var u = r.u, x = 10 * u, y = top + 10 * u, pad = 14 * u;
+    var meta = [];
+    if (c.w.ele != null) meta.push(nf0.format(c.w.ele) + ' m');
+    if (c.w.clock) meta.push(c.w.clock);
+    g.font = font(800, 24 * u, true);
+    var name = fit(g, String(c.w.name).toUpperCase(), r.W - 20 * u - 2 * pad - 5 * u);
+    var w = g.measureText(name).width;
+    g.font = font(600, 14 * u);
+    var m = meta.join(' · ');
+    w = Math.max(w, g.measureText(m).width) + 2 * pad + 5 * u;
+    var h = (meta.length ? 48 : 30) * u;
+    g.fillStyle = '#f6f4ec';
+    plate(g, x, y, w, h, 8 * u);
+    g.fillStyle = '#047857';
+    g.fillRect(x, y + 2 * u, 5 * u, h - 4 * u);
+    g.textBaseline = 'top';
+    g.fillStyle = '#053b30';
+    g.font = font(800, 24 * u, true);
+    g.fillText(name, x + 5 * u + pad, y + 4 * u);
+    if (meta.length) {
+      g.fillStyle = '#4b5d55';
+      g.font = font(600, 14 * u);
+      g.fillText(m, x + 5 * u + pad, y + 29 * u);
+    }
+  }
+
+  // Map credit bottom left, RuteStrip mark bottom right, both on small plates.
+  function drawMarks(g, r) {
+    var u = r.u, W = r.W, H = r.H;
+    g.textBaseline = 'middle';
+    g.font = font(400, 10 * u);
+    var credit = '© OpenStreetMap contributors · Mapzen';
+    var cw = g.measureText(credit).width + 10 * u;
+    g.fillStyle = 'rgba(246, 244, 236, 0.8)';
+    plate(g, 8 * u, H - 8 * u - 16 * u, cw, 16 * u, 4 * u);
+    g.fillStyle = '#14231d';
+    g.fillText(credit, 13 * u, H - 16 * u);
+
+    var ls = 32 * u, pad = 7 * u, gap = r.logo ? ls + 7 * u : 0;
+    g.font = font(800, 21 * u, true);
+    var t1 = g.measureText('RuteStrip').width;
+    g.font = font(600, 10.5 * u);
+    var t2 = g.measureText('rutestrip.ai.id').width;
+    var w = pad + gap + Math.max(t1, t2) + pad + 2 * u, h = ls + 2 * pad;
+    var x = W - w - 8 * u, y = H - h - 30 * u;
+    g.fillStyle = 'rgba(0, 0, 0, 0.42)';
+    plate(g, x, y, w, h, 9 * u);
+    if (r.logo) g.drawImage(r.logo, x + pad, y + pad, ls, ls);
+    g.textBaseline = 'top';
+    g.fillStyle = '#ffffff';
+    g.font = font(800, 21 * u, true);
+    g.fillText('RuteStrip', x + pad + gap, y + pad - 1 * u);
+    g.fillStyle = 'rgba(255, 255, 255, 0.82)';
+    g.font = font(600, 10.5 * u);
+    g.fillText('rutestrip.ai.id', x + pad + gap, y + pad + 21 * u);
+  }
+
+  function progress(r, f) {
+    var now = performance.now();
+    if (now - r.sentAt < 250 && f < 1) return;
+    r.sentAt = now;
+    post('export:progress:' + Math.max(0, Math.min(1, f)).toFixed(3));
+  }
+
+  // Runs on every map frame (MapLibre's render event), while the WebGL buffer still holds it.
+  function compose() {
+    var r = rec;
+    if (!r || r.phase !== 'fly') return;
+    var g = r.g, now = performance.now();
+    g.drawImage(map.getCanvas(), 0, 0, r.W, r.H);
+    var bottom = drawHud(g, r, at(s));
+    drawCallout(g, r, bottom, now);
+    drawMarks(g, r);
+    progress(r, total > 0 ? (0.95 * s) / total : 0.95);
+  }
+
+  function drawEnd(g, r, f) {
+    var u = r.u, W = r.W, H = r.H, cx = W / 2;
+    g.globalAlpha = 1;
+    g.drawImage(r.base, 0, 0);
+    g.globalAlpha = f;
+    g.fillStyle = 'rgba(5, 59, 48, 0.94)';
+    g.fillRect(0, 0, W, H);
+    var ls = 104 * u, y = H / 2 - 120 * u;
+    if (r.logo) g.drawImage(r.logo, cx - ls / 2, y, ls, ls);
+    y += ls + 18 * u;
+    g.textAlign = 'center';
+    g.textBaseline = 'top';
+    if (r.title) {
+      g.fillStyle = '#ffffff';
+      g.font = font(800, 30 * u, true);
+      g.fillText(fit(g, r.title.toUpperCase(), W - 40 * u), cx, y);
+      y += 38 * u;
+    }
+    g.fillStyle = '#a7f3d0';
+    g.font = font(600, 16 * u);
+    g.fillText(nf2.format(total / 1000) + ' km · +' + nf0.format(pts[pts.length - 1][5]) + ' m', cx, y);
+    y += 40 * u;
+    g.fillStyle = '#ffffff';
+    g.font = font(600, 17 * u);
+    g.fillText(r.endLabel || 'RuteStrip', cx, y);
+    y += 26 * u;
+    g.fillStyle = 'rgba(255, 255, 255, 0.8)';
+    g.font = font(400, 14 * u);
+    g.fillText('rutestrip.ai.id', cx, y);
+    g.textAlign = 'left';
+    g.globalAlpha = 1;
+  }
+
+  function exportEndCard() {
+    var r = rec;
+    if (!r || r.phase !== 'fly') return;
+    r.phase = 'end';
+    r.base = document.createElement('canvas');
+    r.base.width = r.W;
+    r.base.height = r.H;
+    r.base.getContext('2d').drawImage(r.out, 0, 0);
+    var t0 = performance.now();
+    var frame = function (now) {
+      if (rec !== r || r.phase !== 'end') return;
+      var t = Math.max(0, (now - t0) / 1000);
+      drawEnd(r.g, r, Math.min(1, t / 0.35));
+      progress(r, 0.95 + 0.05 * Math.min(1, t / END_SECS));
+      if (t >= END_SECS) {
+        r.phase = 'stop';
+        r.durMs = performance.now() - r.t0;
+        try {
+          r.mr.stop();
+        } catch (e) {
+          exportAbort('failed');
+        }
+        return;
+      }
+      requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  }
+
+  function releaseView(r) {
+    if (r.stream) {
+      r.stream.getTracks().forEach(function (t) {
+        t.stop();
+      });
+      r.stream = null;
+    }
+    if (r.lock) {
+      r.lock.release().catch(function () {});
+      r.lock = null;
+    }
+    if (r.viewKept) return;
+    r.viewKept = true;
+    playing = false;
+    try {
+      map.setPixelRatio(r.pr);
+    } catch (e) {
+      /* map gone */
+    }
+  }
+
+  // Stops and forgets the export; kind (if any) goes to the app as export:error:<kind>.
+  function exportAbort(kind) {
+    var r = rec;
+    if (!r) return;
+    rec = null;
+    r.cancelled = true;
+    try {
+      if (r.mr && r.mr.state !== 'inactive') r.mr.stop();
+    } catch (e) {
+      /* already stopped */
+    }
+    releaseView(r);
+    r.parts = [];
+    r.blob = null;
+    r.base = null;
+    if (kind) post('export:error:' + kind);
+    if (!failed) post('paused');
+  }
+
+  function onRecorded(r) {
+    releaseView(r);
+    if (r.cancelled || rec !== r) return;
+    post('export:encoding');
+    var type = r.mime.split(';')[0];
+    var blob = new Blob(r.parts, { type: type });
+    r.parts = [];
+    r.base = null;
+    var ready = function (b) {
+      if (rec !== r) return;
+      if (!b.size) return exportAbort('failed');
+      r.blob = b;
+      r.n = Math.ceil(b.size / CHUNK);
+      r.i = 0;
+      post('export:file:' + JSON.stringify({ ext: type === 'video/mp4' ? 'mp4' : 'webm', mime: type, size: b.size, n: r.n }));
+    };
+    if (type === 'video/webm') {
+      fixWebmDuration(blob, r.durMs).then(ready, function () {
+        ready(blob);
+      });
+    } else ready(blob);
+  }
+
+  function exportNext() {
+    var r = rec;
+    if (!r || !r.blob) return;
+    if (r.i >= r.n) {
+      rec = null;
+      r.blob = null;
+      post('export:end');
+      return;
+    }
+    var i = r.i++;
+    var fr = new FileReader();
+    fr.onload = function () {
+      if (rec !== r) return;
+      var d = String(fr.result);
+      post('export:chunk:' + i + ':' + d.slice(d.indexOf(',') + 1));
+    };
+    fr.onerror = function () {
+      exportAbort('failed');
+    };
+    fr.readAsDataURL(r.blob.slice(i * CHUNK, (i + 1) * CHUNK));
+  }
+
+  function exportStart(opts) {
+    if (rec || !map || failed) return;
+    var mime = pickMime();
+    var out = document.createElement('canvas');
+    if (!mime || typeof out.captureStream !== 'function') return post('export:error:unsupported');
+    var box = map.getContainer();
+    var cw = box.clientWidth || window.innerWidth || 360, ch = box.clientHeight || window.innerHeight || 640;
+    var k = Math.min(720 / cw, 1280 / ch);
+    var W = even(cw * k), H = even(ch * k);
+    out.width = W;
+    out.height = H;
+    var g = out.getContext('2d');
+    if (!g) return post('export:error:unsupported');
+    // About half the 1x replay time: 20 to 45 s whatever the track length.
+    var secs = Math.max(20, Math.min(45, total / mPerSec / 2));
+    var r = (rec = {
+      mime: mime,
+      out: out,
+      g: g,
+      W: W,
+      H: H,
+      u: W / 400,
+      title: String(opts.title || ''),
+      endLabel: String(opts.end || ''),
+      logo: null,
+      rate: total > 0 ? total / secs : 1,
+      phase: 'prep',
+      parts: [],
+      sentAt: 0,
+      pr: map.getPixelRatio(),
+    });
+    if (opts.logo) {
+      var img = new Image();
+      img.onload = function () {
+        r.logo = img;
+      };
+      img.src = opts.logo;
+    }
+    if (navigator.wakeLock && navigator.wakeLock.request) {
+      navigator.wakeLock.request('screen').then(
+        function (l) {
+          if (rec === r) r.lock = l;
+          else l.release();
+        },
+        function () {},
+      );
+    }
+    // Back to the start, map drawn at the video's resolution.
+    playing = false;
+    s = 0;
+    bear = null;
+    drawnAt = -1;
+    shownCallout = null;
+    wpts.forEach(function (w) {
+      w.shown = false;
+    });
+    map.getSource('wpts').setData(wptData());
+    document.getElementById('callout').hidden = true;
+    map.setPixelRatio(Math.min(2, Math.max(r.pr, W / cw)));
+    post('paused');
+
+    var begun = false;
+    var begin = function () {
+      if (begun || rec !== r) return;
+      begun = true;
+      try {
+        r.stream = out.captureStream(30);
+        r.mr = new MediaRecorder(r.stream, { mimeType: mime, videoBitsPerSecond: 4000000 });
+      } catch (e) {
+        return exportAbort('unsupported');
+      }
+      r.mr.ondataavailable = function (e) {
+        if (rec === r && e.data && e.data.size) r.parts.push(e.data);
+      };
+      r.mr.onstop = function () {
+        onRecorded(r);
+      };
+      r.mr.onerror = function () {
+        exportAbort('failed');
+      };
+      r.phase = 'fly';
+      compose();
+      try {
+        r.mr.start(1000);
+      } catch (e) {
+        return exportAbort('unsupported');
+      }
+      r.t0 = performance.now();
+      playing = true;
+      post('playing');
+    };
+    // Let the first tiles arrive (fonts too), but never wait long.
+    map.once('idle', function () {
+      (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(begin, begin);
+    });
+    setTimeout(begin, 6000);
+    post('export:started');
+  }
+
+  // MediaRecorder WebM has no duration, so galleries show 0:00 and cannot seek well. Adds a
+  // Duration element to the Segment Info (Chrome writes no SeekHead or Cues that would move).
+  function fixWebmDuration(blob, ms) {
+    return blob
+      .slice(0, Math.min(blob.size, 65536))
+      .arrayBuffer()
+      .then(function (ab) {
+        var b = new Uint8Array(ab);
+        var len = function (x) {
+          for (var n = 1; n <= 8; n++) if (x & (0x100 >> n)) return n;
+          throw new Error('vint');
+        };
+        var id = function (p) {
+          var n = len(b[p]), v = 0;
+          for (var i = 0; i < n; i++) v = v * 256 + b[p + i];
+          return { v: v, n: n };
+        };
+        var size = function (p) {
+          var n = len(b[p]), v = b[p] & (0xff >> n), unknown = v === 0xff >> n;
+          for (var i = 1; i < n; i++) {
+            v = v * 256 + b[p + i];
+            if (b[p + i] !== 0xff) unknown = false;
+          }
+          return { v: unknown ? -1 : v, n: n };
+        };
+        var e = id(0);
+        if (e.v !== 0x1a45dfa3) throw new Error('not webm');
+        var z = size(e.n);
+        var p = e.n + z.n + z.v;
+        e = id(p);
+        if (e.v !== 0x18538067) throw new Error('no segment');
+        p += e.n + size(p + e.n).n;
+        while (p < b.length - 12) {
+          e = id(p);
+          z = size(p + e.n);
+          var cs = p + e.n + z.n, ce = cs + z.v;
+          if (e.v === 0x1f43b675 || z.v < 0 || ce > b.length) throw new Error('no info');
+          if (e.v === 0x1549a966) {
+            var scale = 1e6;
+            for (var q = cs; q < ce; ) {
+              var ci = id(q), cz = size(q + ci.n), vs = q + ci.n + cz.n;
+              if (ci.v === 0x4489) throw new Error('has duration');
+              if (ci.v === 0x2ad7b1) {
+                scale = 0;
+                for (var i = 0; i < cz.v; i++) scale = scale * 256 + b[vs + i];
+              }
+              q = vs + cz.v;
+            }
+            var dur = new Uint8Array(11);
+            dur.set([0x44, 0x89, 0x88]);
+            new DataView(dur.buffer).setFloat64(3, (ms * 1e6) / (scale || 1e6));
+            var body = z.v + 11;
+            var head = new Uint8Array(12);
+            head.set([0x15, 0x49, 0xa9, 0x66, 0x01]);
+            for (var j = 0; j < 7; j++) head[11 - j] = Math.floor(body / Math.pow(256, j)) & 0xff;
+            return new Blob([blob.slice(0, p), head, blob.slice(cs, ce), dur, blob.slice(ce)], { type: blob.type });
+          }
+          p = ce;
+        }
+        throw new Error('no info');
+      });
+  }
+
+  window.replayExport = function (cmd, json) {
+    if (cmd === 'start') {
+      var o = {};
+      try {
+        o = JSON.parse(json || '{}') || {};
+      } catch (e) {
+        /* defaults */
+      }
+      exportStart(o);
+    } else if (cmd === 'next') exportNext();
+    else if (cmd === 'cancel') exportAbort(null);
+  };
 
   window.replayStart = function (json) {
     if (map) return;
@@ -341,7 +830,7 @@
   };
 
   window.replayControl = function (cmd, arg) {
-    if (!map || failed) return;
+    if (!map || failed || rec) return;
     if (cmd === 'play') {
       if (s >= total) cmd = 'restart';
       else {

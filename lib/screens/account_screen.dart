@@ -9,6 +9,7 @@ import '../widgets/common.dart';
 import '../widgets/contour_header.dart';
 import 'route_detail_screen.dart';
 import '../widgets/gpx_actions.dart';
+import 'profile_screen.dart';
 import 'recording_screen.dart';
 import 'results_screen.dart';
 import 'settings_screen.dart';
@@ -506,6 +507,8 @@ class _MenuCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final menu = [
+      (Icons.badge_outlined, 'prof.mine', () => const ProfileScreen()),
+      (Icons.bookmark_border, 'feed.saved', () => const SavedScreen()),
       (Icons.manage_accounts_outlined, 'set.title', () => const SettingsScreen()),
       (Icons.fact_check_outlined, 'sub.title', () => const SubmissionsScreen()),
       (Icons.history, 'hist.title', () => const HistoryScreen()),

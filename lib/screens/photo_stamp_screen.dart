@@ -9,8 +9,10 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../api.dart';
 import '../i18n.dart';
 import '../theme.dart';
+import 'compose_screen.dart';
 
 /// What goes on the photo: where and when it was taken and how far the hike has come.
 class StampInfo {
@@ -26,7 +28,13 @@ Future<void> takeStampedPhoto(BuildContext context, StampInfo info) async {
   final status = await Permission.camera.request();
   if (!context.mounted) return;
   if (!status.isGranted) {
-    messenger.showSnackBar(SnackBar(content: Text(tr(context, 'stamp.camera'))));
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(tr(context, 'stamp.camera')),
+        // Refused for good: only the app settings can turn the camera back on.
+        action: status.isPermanentlyDenied ? SnackBarAction(label: tr(context, 'record.settings'), onPressed: openAppSettings) : null,
+      ),
+    );
     return;
   }
   final shot = await ImagePicker().pickImage(source: ImageSource.camera, maxWidth: 1600, maxHeight: 1600, imageQuality: 88);
@@ -123,6 +131,18 @@ class _PhotoStampScreenState extends State<PhotoStampScreen> {
     );
   }
 
+  /// The stamped photo as a post, with the spot where it was taken.
+  Future<void> _toFeed() async {
+    final f = _file;
+    if (f == null) return;
+    final i = widget.info;
+    await shareToFeed(
+      context,
+      photoPath: f.path,
+      place: i.lat != null && i.lng != null ? Place(lat: i.lat!, lng: i.lng!, label: i.title) : null,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -136,6 +156,21 @@ class _PhotoStampScreenState extends State<PhotoStampScreen> {
                 child: _png == null
                     ? const CircularProgressIndicator(color: Colors.white)
                     : InteractiveViewer(child: Image.memory(_png!, semanticLabel: tr(context, 'stamp.title'))),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Colors.white70),
+                  ),
+                  onPressed: _file == null ? null : _toFeed,
+                  icon: const Icon(Icons.dynamic_feed_outlined),
+                  label: Text(tr(context, 'post.send_photo')),
+                ),
               ),
             ),
             Padding(
